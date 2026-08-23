@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlobalShip — Freight Manifest & Live Tracking</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Work+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+  :root{
+    --ink:#0a0c10;
+    --surface:#14171d;
+    --surface-2:#1b1f27;
+    --line:#262b34;
+    --paper:#f2f0ea;
+    --steel:#8791a0;
+    --gold:#d4a017;
+    --gold-soft:rgba(212,160,23,0.15);
+    --signal:#4f8cff;
+    --signal-soft:rgba(79,140,255,0.15);
+    --danger:#ff5c5c;
+    --success:#35c98c;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    background:var(--ink);
+    color:var(--paper);
+    font-family:'Work Sans',sans-serif;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3,h4{font-family:'Space Grotesk',sans-serif;font-weight:700;letter-spacing:-0.01em;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+  .container{width:100%;max-width:1180px;margin:0 auto;padding:0 24px;}
+  a{color:inherit;text-decoration:none;}
+
+  /* Header */
+  header{
+    position:sticky;top:0;z-index:200;
+    background:rgba(10,12,16,0.85);
+    backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line);
+  }
+  .header-content{display:flex;align-items:center;justify-content:space-between;padding:16px 0;}
+  .logo{display:flex;align-items:center;gap:10px;font-size:1.35rem;font-weight:700;}
+  .logo i{color:var(--gold);}
+  nav ul{display:flex;list-style:none;gap:8px;}
+  nav a{color:var(--steel);font-weight:500;font-size:0.92rem;padding:8px 14px;border-radius:6px;transition:all .2s;}
+  nav a:hover{color:var(--paper);background:var(--surface-2);}
+  .header-right{display:flex;align-items:center;gap:12px;}
+  #welcomeText{color:var(--steel);font-size:0.9rem;display:none;}
+  .btn{
+    padding:10px 20px;border-radius:6px;border:1px solid transparent;
+    font-weight:600;font-size:0.9rem;cursor:pointer;transition:all .2s;font-family:inherit;
+  }
+  .btn-gold{background:var(--gold);color:#1a1200;}
+  .btn-gold:hover{background:#e6b02a;}
+  .btn-outline{background:transparent;border-color:var(--line);color:var(--paper);}
+  .btn-outline:hover{border-color:var(--steel);}
+  .btn-danger{background:transparent;border-color:var(--danger);color:var(--danger);}
+  .btn-danger:hover{background:rgba(255,92,92,0.1);}
+  .nav-toggle{display:none;background:none;border:none;color:var(--paper);font-size:1.4rem;cursor:pointer;}
+
+  /* Hero */
+  .hero{padding:80px 0 60px;position:relative;overflow:hidden;}
+  .hero-grid{display:grid;grid-template-columns:1.1fr 1fr;gap:50px;align-items:center;}
+  .eyebrow{
+    display:inline-flex;align-items:center;gap:8px;
+    color:var(--gold);font-family:'JetBrains Mono',monospace;font-size:0.78rem;
+    letter-spacing:0.12em;text-transform:uppercase;margin-bottom:18px;
+  }
+  .eyebrow::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--gold);display:inline-block;}
+  .hero h1{font-size:3rem;line-height:1.1;margin-bottom:20px;}
+  .hero p.lead{color:var(--steel);font-size:1.1rem;max-width:520px;margin-bottom:30px;}
+
+  /* Signature: waybill / route card */
+  .waybill{
+    background:var(--surface);border:1px solid var(--line);border-radius:14px;
+    padding:26px;position:relative;
+  }
+  .waybill::before, .waybill::after{
+    content:'';position:absolute;width:22px;height:22px;border-radius:50%;
+    background:var(--ink);top:50%;transform:translateY(-50%);
+  }
+  .waybill::before{left:-11px;}
+  .waybill::after{right:-11px;}
+
+  /* Hero shipping animation (no text/labels) */
+  .ship-scene-panel{
+    border-radius:14px;overflow:hidden;border:1px solid var(--line);
+    aspect-ratio:480/320;background:var(--surface);
+  }
+  .ship-scene{width:100%;height:100%;display:block;}
+  .ship-drift{animation:shipDrift 14s ease-in-out infinite;}
+  .ship-bob{transform-box:fill-box;transform-origin:center;animation:shipBob 3.2s ease-in-out infinite;}
+  @keyframes shipDrift{
+    0%{transform:translate(90px,240px);}
+    50%{transform:translate(300px,240px);}
+    100%{transform:translate(90px,240px);}
+  }
+  @keyframes shipBob{
+    0%,100%{transform:translateY(0) rotate(0deg);}
+    50%{transform:translateY(-4px) rotate(0.6deg);}
+  }
+  .wave{transform-box:fill-box;}
+  .wave-1{animation:waveScroll 9s linear infinite;}
+  .wave-2{animation:waveScroll 13s linear infinite reverse;}
+  @keyframes waveScroll{
+    0%{transform:translateX(0);}
+    100%{transform:translateX(480px);}
+  }
+  .cloud-drift-1{animation:cloudMove 22s linear infinite;}
+  .cloud-drift-2{animation:cloudMove 30s linear infinite reverse;}
+  @keyframes cloudMove{
+    0%{transform:translateX(-20px);}
+    50%{transform:translateX(20px);}
+    100%{transform:translateX(-20px);}
+  }
+  .plane-fly{transform-box:fill-box;animation:planeFly 16s linear infinite;}
+  @keyframes planeFly{
+    0%{transform:translate(-80px,60px);}
+    100%{transform:translate(560px,10px);}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .ship-drift, .ship-bob, .wave-1, .wave-2, .cloud-drift-1, .cloud-drift-2, .plane-fly, .mover, .pulse{
+      animation:none !important;
+    }
+  }
+  .waybill-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px;}
+  .waybill-id{font-family:'JetBrains Mono',monospace;font-size:0.95rem;color:var(--paper);}
+  .live-dot{
+    display:inline-flex;align-items:center;gap:6px;font-size:0.72rem;font-weight:600;
+    color:var(--success);text-transform:uppercase;letter-spacing:0.08em;
+  }
+  .live-dot .pulse{width:8px;height:8px;border-radius:50%;background:var(--success);animation:pulse 1.6s infinite;}
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(53,201,140,0.55);}
+    70%{box-shadow:0 0 0 8px rgba(53,201,140,0);}
+    100%{box-shadow:0 0 0 0 rgba(53,201,140,0);}
+  }
+  .route{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:22px;}
+  .route-point{flex:0 0 auto;max-width:110px;}
+  .route-point .label{font-size:0.68rem;color:var(--steel);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;}
+  .route-point .place{font-weight:600;font-size:0.92rem;}
+  .route-line{flex:1;position:relative;height:2px;background:repeating-linear-gradient(90deg,var(--line) 0 6px,transparent 6px 12px);margin-top:8px;}
+  .route-line .mover{
+    position:absolute;top:-4px;width:10px;height:10px;border-radius:50%;
+    background:var(--signal);box-shadow:0 0 0 4px var(--signal-soft);
+    animation:move 4s ease-in-out infinite;
+  }
+  @keyframes move{
+    0%,100%{left:0%;}
+    50%{left:92%;}
+  }
+  .status-row{display:flex;justify-content:space-between;align-items:center;}
+  .badge{padding:4px 12px;border-radius:20px;font-size:0.74rem;font-weight:700;text-transform:capitalize;}
+  .badge-pending{background:rgba(212,160,23,0.18);color:var(--gold);}
+  .badge-authorized{background:var(--signal-soft);color:var(--signal);}
+  .badge-in_transit{background:var(--signal-soft);color:var(--signal);}
+  .badge-out_for_delivery{background:rgba(212,160,23,0.18);color:var(--gold);}
+  .badge-approved{background:rgba(53,201,140,0.15);color:var(--success);}
+  .badge-delivered{background:rgba(53,201,140,0.15);color:var(--success);}
+  .badge-blocked{background:rgba(255,92,92,0.15);color:var(--danger);}
+
+  /* Track form */
+  .track-panel{margin-top:60px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:32px;}
+  .track-form{display:flex;gap:12px;}
+  .track-form input{
+    flex:1;padding:14px 16px;border-radius:8px;border:1px solid var(--line);
+    background:var(--surface-2);color:var(--paper);font-size:0.95rem;font-family:'JetBrains Mono',monospace;
+  }
+  .track-form input:focus{outline:none;border-color:var(--signal);}
+  .empty-note{color:var(--steel);font-size:0.88rem;margin-top:10px;}
+
+  .tracking-result{margin-top:24px;}
+  .result-card{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:26px;}
+  .timeline{margin-top:20px;border-top:1px solid var(--line);padding-top:18px;}
+  .timeline-item{display:flex;gap:14px;padding:10px 0;border-bottom:1px dashed var(--line);}
+  .timeline-item:last-child{border-bottom:none;}
+  .timeline-dot{width:9px;height:9px;border-radius:50%;background:var(--signal);margin-top:6px;flex-shrink:0;}
+  .timeline-content .t-loc{font-weight:600;font-size:0.92rem;}
+  .timeline-content .t-note{color:var(--steel);font-size:0.86rem;}
+  .timeline-content .t-time{color:var(--steel);font-size:0.76rem;font-family:'JetBrains Mono',monospace;margin-top:2px;}
+
+  /* Sections */
+  .section{padding:70px 0;}
+  .section-alt{background:var(--surface);}
+  .section-title{font-size:2rem;margin-bottom:8px;}
+  .section-sub{color:var(--steel);margin-bottom:36px;}
+
+  .features-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;}
+  .feature-card{
+    background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:26px;
+    transition:transform .2s, border-color .2s;
+  }
+  .feature-card:hover{transform:translateY(-4px);border-color:var(--gold);}
+  .feature-icon{width:44px;height:44px;border-radius:10px;background:var(--gold-soft);color:var(--gold);
+    display:flex;align-items:center;justify-content:center;font-size:1.1rem;margin-bottom:16px;}
+  .feature-card h3{font-size:1.05rem;margin-bottom:8px;}
+  .feature-card p{color:var(--steel);font-size:0.92rem;}
+
+  /* Testimonials */
+  .testimonial-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:22px;}
+  .testimonial-card{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:24px;}
+  .stars{color:var(--gold);letter-spacing:3px;font-size:1rem;margin-bottom:12px;}
+  .testimonial-text{color:var(--paper);font-size:0.94rem;margin-bottom:18px;line-height:1.65;}
+  .testimonial-author{display:flex;align-items:center;gap:12px;}
+  .avatar{width:38px;height:38px;border-radius:50%;background:var(--gold-soft);color:var(--gold);
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.82rem;flex-shrink:0;}
+  .testimonial-author .name{font-weight:600;font-size:0.9rem;}
+  .testimonial-author .role{color:var(--steel);font-size:0.8rem;}
+
+  /* Certifications */
+  .cert-row{display:flex;gap:18px;flex-wrap:wrap;}
+  .cert-badge{
+    flex:1;min-width:150px;background:var(--surface-2);border:1px solid var(--line);border-radius:12px;
+    padding:22px 16px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;
+    transition:border-color .2s;
+  }
+  .cert-badge:hover{border-color:var(--gold);}
+  .cert-badge i{font-size:1.6rem;color:var(--gold);}
+  .cert-badge span{font-size:0.8rem;color:var(--steel);font-weight:600;line-height:1.4;}
+
+  /* Modal */
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;padding:20px;}
+  .modal-overlay.open{display:flex;}
+  .modal-box{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:30px;width:100%;max-width:400px;position:relative;}
+  .modal-close{position:absolute;top:16px;right:18px;cursor:pointer;color:var(--steel);font-size:1.1rem;}
+  .modal-close:hover{color:var(--paper);}
+  .modal-title{font-size:1.15rem;margin-bottom:6px;}
+  .modal-desc{color:var(--steel);font-size:0.85rem;margin-bottom:20px;}
+  .modal-tabs{display:flex;gap:8px;margin-bottom:20px;}
+  .modal-tab{flex:1;padding:10px;text-align:center;cursor:pointer;border-bottom:2px solid var(--line);font-weight:600;color:var(--steel);font-size:0.9rem;}
+  .modal-tab.active{border-bottom-color:var(--gold);color:var(--paper);}
+  .form-field{margin-bottom:14px;}
+  .form-field label{display:block;font-size:0.78rem;font-weight:600;margin-bottom:6px;color:var(--steel);text-transform:uppercase;letter-spacing:0.04em;}
+  .form-field input{
+    width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:7px;
+    background:var(--surface-2);color:var(--paper);font-size:0.92rem;font-family:'Work Sans',sans-serif;
+  }
+  .form-field input:focus{outline:none;border-color:var(--gold);}
+  .form-submit-btn{width:100%;padding:12px;background:var(--gold);color:#1a1200;border:none;border-radius:7px;font-weight:700;cursor:pointer;margin-top:4px;font-family:inherit;}
+  .form-submit-btn:hover{background:#e6b02a;}
+  .alert-box{padding:10px 14px;border-radius:7px;font-size:0.86rem;margin-bottom:14px;display:none;}
+  .alert-box.show{display:block;}
+  .alert-error{background:rgba(255,92,92,0.12);color:var(--danger);border:1px solid rgba(255,92,92,0.3);}
+  .alert-success{background:rgba(53,201,140,0.12);color:var(--success);border:1px solid rgba(53,201,140,0.3);}
+
+  /* Dashboard */
+  .dashboard-section{display:none;padding:60px 0;background:var(--surface);}
+  .dashboard-section.open{display:block;}
+  .dashboard-grid{display:grid;grid-template-columns:1fr 1.4fr;gap:24px;align-items:start;}
+  .panel{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:24px;}
+  .panel h3{margin-bottom:16px;font-size:1.05rem;}
+  .shipment-card{border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:12px;background:var(--surface);}
+  .shipment-card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap;}
+  .shipment-route{color:var(--steel);font-size:0.85rem;margin-bottom:6px;}
+  .shipment-meta{color:var(--steel);font-size:0.85rem;}
+  .mini-btn{padding:7px 13px;border-radius:6px;border:none;font-size:0.78rem;font-weight:700;cursor:pointer;margin-right:6px;margin-top:8px;font-family:inherit;}
+  .mini-btn-primary{background:var(--signal);color:#fff;}
+  .mini-btn-approve{background:var(--success);color:#04140d;}
+  .mini-btn-block{background:var(--danger);color:#1a0505;}
+  .otp-row, .checkpoint-row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;}
+  .otp-row input, .checkpoint-row input, .checkpoint-row select{
+    flex:1;min-width:100px;padding:8px 10px;border-radius:6px;border:1px solid var(--line);
+    background:var(--surface-2);color:var(--paper);font-size:0.85rem;font-family:'Work Sans',sans-serif;
+  }
+  .checkpoint-row{border-top:1px dashed var(--line);padding-top:10px;margin-top:10px;}
+
+  footer{border-top:1px solid var(--line);padding:50px 0 24px;background:var(--ink);}
+  .footer-grid{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:30px;margin-bottom:30px;}
+  .footer-col h3{font-size:1rem;margin-bottom:14px;}
+  .footer-col p{color:var(--steel);font-size:0.88rem;}
+  .footer-col ul{list-style:none;}
+  .footer-col li{margin-bottom:8px;}
+  .footer-col a{color:var(--steel);font-size:0.88rem;}
+  .footer-col a:hover{color:var(--paper);}
+  .social-links{display:flex;gap:10px;margin-top:16px;}
+  .social-links a{width:34px;height:34px;border-radius:50%;background:var(--surface-2);display:flex;align-items:center;justify-content:center;color:var(--steel);}
+  .social-links a:hover{color:var(--paper);}
+  .footer-bottom{display:flex;justify-content:space-between;align-items:center;padding-top:20px;border-top:1px solid var(--line);color:var(--steel);font-size:0.82rem;flex-wrap:wrap;gap:10px;}
+  .admin-link{color:var(--steel);font-size:0.8rem;opacity:0.7;}
+  .admin-link:hover{opacity:1;color:var(--paper);}
+
+  @media (max-width:860px){
+    nav{position:fixed;top:65px;left:0;right:0;background:var(--ink);border-bottom:1px solid var(--line);
+      flex-direction:column;padding:10px 20px;display:none;}
+    nav.open{display:block;}
+    nav ul{flex-direction:column;gap:4px;}
+    .nav-toggle{display:block;}
+    .hero-grid{grid-template-columns:1fr;}
+    .hero h1{font-size:2.1rem;}
+    .features-grid{grid-template-columns:1fr;}
+    .dashboard-grid{grid-template-columns:1fr;}
+    .footer-grid{grid-template-columns:1fr 1fr;}
+    .track-form{flex-direction:column;}
+    .route{gap:4px;}
+    .route-point{max-width:80px;}
+    .testimonial-grid{grid-template-columns:1fr;}
+    .cert-row{gap:12px;}
+    .cert-badge{min-width:120px;padding:16px 10px;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container header-content">
+    <div class="logo"><i class="fas fa-ship"></i><span>GlobalShip</span></div>
+    <button class="nav-toggle" id="navToggle"><i class="fas fa-bars"></i></button>
+    <nav id="mainNav">
+      <ul>
+        <li><a href="#top">Home</a></li>
+        <li><a href="#track">Track</a></li>
+        <li><a href="#features">Why Us</a></li>
+      </ul>
+    </nav>
+    <div class="header-right">
+      <span id="welcomeText"></span>
+      <button class="btn btn-outline" id="signInBtn">Sign In</button>
+      <button class="btn btn-gold" id="dashboardBtn" style="display:none;">Dashboard</button>
+      <button class="btn btn-danger" id="signOutBtn" style="display:none;">Sign Out</button>
+    </div>
+  </div>
+</header>
+
+<!-- Customer Auth Modal -->
+<div class="modal-overlay" id="authModal">
+  <div class="modal-box">
+    <span class="modal-close" id="authModalClose"><i class="fas fa-times"></i></span>
+    <div class="modal-title">Customer Account</div>
+    <div class="modal-desc">Track shipments and create new ones.</div>
+    <div class="modal-tabs">
+      <div class="modal-tab active" id="loginTab">Log In</div>
+      <div class="modal-tab" id="registerTab">Register</div>
+    </div>
+    <div class="alert-box" id="authAlert"></div>
+    <form id="loginForm">
+      <div class="form-field"><label>Email</label><input type="email" id="loginEmail" required></div>
+      <div class="form-field"><label>Password</label><input type="password" id="loginPassword" required></div>
+      <button type="submit" class="form-submit-btn">Log In</button>
+    </form>
+    <form id="registerForm" style="display:none;">
+      <div class="form-field"><label>Username</label><input type="text" id="registerUsername" required></div>
+      <div class="form-field"><label>Email</label><input type="email" id="registerEmail" required></div>
+      <div class="form-field"><label>Password</label><input type="password" id="registerPassword" required></div>
+      <button type="submit" class="form-submit-btn">Create Account</button>
+    </form>
+  </div>
+</div>
+
+<!-- Admin Access Modal (separate from customer login) -->
+<div class="modal-overlay" id="adminModal">
+  <div class="modal-box">
+    <span class="modal-close" id="adminModalClose"><i class="fas fa-times"></i></span>
+    <div class="modal-title"><i class="fas fa-lock" style="color:var(--gold);"></i> Admin Access</div>
+    <div class="modal-desc">Restricted. This is a separate password from any customer account.</div>
+    <div class="alert-box" id="adminAlert"></div>
+    <form id="adminLoginForm">
+      <div class="form-field"><label>Admin Password</label><input type="password" id="adminPassword" required></div>
+      <button type="submit" class="form-submit-btn">Enter Admin Panel</button>
+    </form>
+  </div>
+</div>
+
+<!-- Dashboard -->
+<section class="dashboard-section" id="dashboardSection">
+  <div class="container">
+    <h2 class="section-title" id="dashboardTitle">Your Dashboard</h2>
+    <div class="alert-box" id="dashboardAlert"></div>
+
+    <div class="dashboard-grid" id="customerPanels">
+      <div class="panel">
+        <h3>Create Shipment</h3>
+        <form id="createShipmentForm">
+          <div class="form-field"><label>Recipient Name</label><input type="text" id="shipRecipient" required></div>
+          <div class="form-field"><label>Dispatch Location (Origin)</label><input type="text" id="shipOrigin" placeholder="e.g. New York, US" required></div>
+          <div class="form-field"><label>Destination</label><input type="text" id="shipDestination" placeholder="e.g. London, UK" required></div>
+          <div class="form-field"><label>Items</label><input type="text" id="shipItems" placeholder="e.g. 2x laptop, 1x charger" required></div>
+          <div class="form-field"><label>Declared Value ($)</label><input type="number" id="shipValue" min="0" step="0.01" required></div>
+          <button type="submit" class="form-submit-btn">Create Shipment</button>
+        </form>
+      </div>
+      <div class="panel">
+        <h3>My Shipments</h3>
+        <div id="myShipmentsList"><p class="empty-note">No shipments yet.</p></div>
+      </div>
+    </div>
+
+    <div class="panel" id="adminPanel" style="display:none; margin-top:24px;">
+      <h3>All Shipments — Live Control</h3>
+      <div id="adminShipmentsList"><p class="empty-note">Loading...</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- Hero -->
+<section class="hero" id="top">
+  <div class="container">
+    <div class="hero-grid">
+      <div>
+        <div class="eyebrow">Live cargo network</div>
+        <h1>Every shipment,<br>tracked door to door.</h1>
+        <p class="lead">From dispatch to destination, follow your freight in real time — with checkpoints logged the moment they happen.</p>
+      </div>
+      <div class="ship-scene-panel">
+        <svg class="ship-scene" viewBox="0 0 480 320" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+          <defs>
+            <linearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#0d1420"/>
+              <stop offset="100%" stop-color="#152238"/>
+            </linearGradient>
+            <linearGradient id="seaGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#16324a"/>
+              <stop offset="100%" stop-color="#0d1e2e"/>
+            </linearGradient>
+          </defs>
+
+          <rect x="0" y="0" width="480" height="320" fill="url(#skyGrad)"/>
+          <circle cx="380" cy="70" r="34" fill="#d4a017" opacity="0.18"/>
+          <circle cx="380" cy="70" r="20" fill="#d4a017" opacity="0.3"/>
+
+          <g class="cloud-drift-1" opacity="0.15" fill="#f2f0ea">
+            <ellipse cx="90" cy="60" rx="34" ry="10"/>
+            <ellipse cx="115" cy="55" rx="22" ry="9"/>
+          </g>
+          <g class="cloud-drift-2" opacity="0.1" fill="#f2f0ea">
+            <ellipse cx="260" cy="40" rx="28" ry="8"/>
+            <ellipse cx="280" cy="36" rx="18" ry="7"/>
+          </g>
+
+          <g class="plane-fly">
+            <path d="M0 0 L26 0 L34 4 L26 8 L0 8 L6 4 Z" fill="#4f8cff" opacity="0.55"/>
+            <line x1="-60" y1="4" x2="0" y2="4" stroke="#4f8cff" stroke-width="1" stroke-dasharray="3 4" opacity="0.35"/>
+          </g>
+
+          <rect x="0" y="210" width="480" height="110" fill="url(#seaGrad)"/>
+          <path class="wave wave-1" d="M-480 218 C -450 210, -410 210, -380 218 C -350 226, -310 226, -280 218 C -250 210, -210 210, -180 218 C -150 226, -110 226, -80 218 C -50 210, -10 210, 20 218 C 50 226, 90 226, 120 218 C 150 210, 190 210, 220 218 C 250 226, 290 226, 320 218 C 350 210, 390 210, 420 218 C 450 226, 490 226, 520 218 L 520 230 L -480 230 Z" fill="#1c3f5c" opacity="0.7"/>
+          <path class="wave wave-2" d="M-480 226 C -440 218, -400 234, -360 226 C -320 218, -280 234, -240 226 C -200 218, -160 234, -120 226 C -80 218, -40 234, 0 226 C 40 218, 80 234, 120 226 C 160 218, 200 234, 240 226 C 280 218, 320 234, 360 226 C 400 218, 440 234, 480 226 L 480 240 L -480 240 Z" fill="#20476a" opacity="0.6"/>
+
+          <g class="ship-drift">
+            <g class="ship-bob">
+              <rect x="-70" y="-8" width="140" height="16" rx="3" fill="#0a0c10" stroke="#262b34"/>
+              <rect x="-56" y="-24" width="24" height="18" fill="#d4a017"/>
+              <rect x="-28" y="-24" width="24" height="18" fill="#4f8cff"/>
+              <rect x="0" y="-24" width="24" height="18" fill="#8791a0"/>
+              <rect x="28" y="-24" width="24" height="18" fill="#d4a017"/>
+              <polygon points="-70,-8 -82,4 -70,4" fill="#0a0c10" stroke="#262b34"/>
+              <polygon points="70,-8 82,4 70,4" fill="#0a0c10" stroke="#262b34"/>
+              <rect x="52" y="-38" width="10" height="14" fill="#14171d" stroke="#262b34"/>
+            </g>
+          </g>
+        </svg>
+      </div>
+    </div>
+
+    <div class="track-panel" id="track">
+      <h3 style="margin-bottom:6px;">Track a Shipment</h3>
+      <p class="section-sub" style="margin-bottom:20px;">Enter a shipment ID or tracking code. Sign in first — lookups are authenticated.</p>
+      <div class="track-form">
+        <input type="text" id="trackingInput" placeholder="Shipment ID (e.g. 1) or tracking code (e.g. SHP-XXXX-0001)">
+        <button class="btn btn-gold" id="trackBtn">Track</button>
+      </div>
+      <p id="trackingNote" class="empty-note"></p>
+      <div class="tracking-result" id="trackingResult"></div>
+    </div>
+  </div>
+</section>
+
+<!-- Features -->
+<section class="section section-alt" id="features">
+  <div class="container">
+    <h2 class="section-title">Why Choose GlobalShip?</h2>
+    <p class="section-sub">Built for shipments that matter — with a full checkpoint history, not just a status dot.</p>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon"><i class="fas fa-satellite-dish"></i></div>
+        <h3>Live Checkpoints</h3>
+        <p>Every hub, hand-off, and border crossing is logged the moment it happens — not batched overnight.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon"><i class="fas fa-route"></i></div>
+        <h3>Origin to Destination</h3>
+        <p>See the full route your cargo is taking, not just a single "in transit" label.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon"><i class="fas fa-shield-halved"></i></div>
+        <h3>Authorized Dispatch</h3>
+        <p>Every shipment is confirmed by the sender via one-time code before it ever leaves the origin hub.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Testimonials -->
+<section class="section" id="testimonials">
+  <div class="container">
+    <h2 class="section-title">What Clients Say</h2>
+    <p class="section-sub">Real feedback from shipments received through our network.</p>
+    <div class="testimonial-grid">
+      <div class="testimonial-card">
+        <div class="stars">★★★★★</div>
+        <p class="testimonial-text">"My shipment arrived earlier than expected and every checkpoint update matched what actually happened. Smoothest customs clearance I've had."</p>
+        <div class="testimonial-author">
+          <div class="avatar">AO</div>
+          <div><div class="name">Amara O.</div><div class="role">Import Merchant</div></div>
+        </div>
+      </div>
+      <div class="testimonial-card">
+        <div class="stars">★★★★★</div>
+        <p class="testimonial-text">"Being able to see the route from dispatch to my door in real time took away all the usual guesswork. Package arrived intact and on schedule."</p>
+        <div class="testimonial-author">
+          <div class="avatar">DK</div>
+          <div><div class="name">David K.</div><div class="role">E-commerce Seller</div></div>
+        </div>
+      </div>
+      <div class="testimonial-card">
+        <div class="stars">★★★★☆</div>
+        <p class="testimonial-text">"Great communication throughout, only reason it's not five stars is a short delay at the transit hub — but the tracking kept me informed the whole way."</p>
+        <div class="testimonial-author">
+          <div class="avatar">RS</div>
+          <div><div class="name">Rina S.</div><div class="role">Freight Forwarder</div></div>
+        </div>
+      </div>
+      <div class="testimonial-card">
+        <div class="stars">★★★★★</div>
+        <p class="testimonial-text">"Received a large freight shipment last month — knowing it needed admin sign-off before it moved gave me real peace of mind."</p>
+        <div class="testimonial-author">
+          <div class="avatar">TM</div>
+          <div><div class="name">Tunde M.</div><div class="role">Warehouse Manager</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Certifications -->
+<section class="section section-alt" id="certifications">
+  <div class="container">
+    <h2 class="section-title">Certified & Compliant</h2>
+    <p class="section-sub">Held to the standards that matter in international freight.</p>
+    <div class="cert-row">
+      <div class="cert-badge"><i class="fas fa-certificate"></i><span>ISO 9001<br>Quality Managed</span></div>
+      <div class="cert-badge"><i class="fas fa-plane"></i><span>IATA<br>Air Cargo Certified</span></div>
+      <div class="cert-badge"><i class="fas fa-globe"></i><span>FIATA<br>Member Network</span></div>
+      <div class="cert-badge"><i class="fas fa-shield-halved"></i><span>C-TPAT<br>Supply Chain Security</span></div>
+      <div class="cert-badge"><i class="fas fa-anchor"></i><span>AEO<br>Authorized Economic Operator</span></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-col">
+        <div class="logo" style="margin-bottom:12px;"><i class="fas fa-ship"></i><span>GlobalShip</span></div>
+        <p>Trusted freight tracking from dispatch to delivery, across every border in between.</p>
+        <div class="social-links">
+          <a href="#"><i class="fab fa-facebook-f"></i></a>
+          <a href="#"><i class="fab fa-twitter"></i></a>
+          <a href="#"><i class="fab fa-linkedin-in"></i></a>
+        </div>
+      </div>
+      <div class="footer-col">
+        <h3>Quick Links</h3>
+        <ul>
+          <li><a href="#top">Home</a></li>
+          <li><a href="#track">Track</a></li>
+          <li><a href="#features">Why Us</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h3>Services</h3>
+        <ul>
+          <li><a href="#">International Shipping</a></li>
+          <li><a href="#">Express Delivery</a></li>
+          <li><a href="#">Customs Clearance</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h3>Contact</h3>
+        <ul>
+          <li>APM Terminals Port Elizabeth, NJ</li>
+          <li>info@globalship.com</li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>&copy; 2026 GlobalShip. All rights reserved.</span>
+      <a href="#" class="admin-link" id="adminAccessLink"><i class="fas fa-lock"></i> Admin Access</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Local dev talks to your backend on localhost. Once you deploy the backend
+  // (e.g. to Render), replace the string below with its real URL —
+  // e.g. 'https://your-backend-name.onrender.com' — no trailing slash.
+  const DEPLOYED_API_BASE = 'https://your-backend-name.onrender.com';
+  const API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    ? 'http://localhost:3000'
+    : DEPLOYED_API_BASE;
+  let authToken = localStorage.getItem('authToken') || null;
+  let currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
+  let trackPollInterval = null;
+
+  async function apiRequest(path, options = {}) {
+    const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+    let data;
+    try { data = await res.json(); } catch (e) { data = {}; }
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    return data;
+  }
+
+  function showAlert(el, message, type) { el.textContent = message; el.className = `alert-box show alert-${type}`; }
+  function hideAlert(el) { el.className = 'alert-box'; }
+
+  function setSession(token, user) {
+    authToken = token; currentUser = user;
+    if (token) {
+      localStorage.setItem('authToken', token);
+      localStorage.setItem('currentUser', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('currentUser');
+    }
+    updateAuthUI();
+  }
+
+  function updateAuthUI() {
+    const welcomeText = document.getElementById('welcomeText');
+    const signInBtn = document.getElementById('signInBtn');
+    const dashboardBtn = document.getElementById('dashboardBtn');
+    const signOutBtn = document.getElementById('signOutBtn');
+    const adminPanel = document.getElementById('adminPanel');
+    const customerPanels = document.getElementById('customerPanels');
+    const dashboardTitle = document.getElementById('dashboardTitle');
+
+    if (currentUser) {
+      welcomeText.style.display = 'inline';
+      welcomeText.textContent = currentUser.role === 'admin' ? 'Admin session' : `Hi, ${currentUser.username}`;
+      signInBtn.style.display = 'none';
+      dashboardBtn.style.display = 'inline-block';
+      signOutBtn.style.display = 'inline-block';
+
+      const isAdmin = currentUser.role === 'admin';
+      adminPanel.style.display = isAdmin ? 'block' : 'none';
+      customerPanels.style.display = isAdmin ? 'none' : 'grid';
+      dashboardTitle.textContent = isAdmin ? 'Admin Dashboard' : 'Your Dashboard';
+    } else {
+      welcomeText.style.display = 'none';
+      signInBtn.style.display = 'inline-block';
+      dashboardBtn.style.display = 'none';
+      signOutBtn.style.display = 'none';
+      document.getElementById('dashboardSection').classList.remove('open');
+    }
+  }
+
+  function badgeHtml(status) {
+    return `<span class="badge badge-${status}">${status.replace(/_/g,' ')}</span>`;
+  }
+
+  function renderShipmentCard(s, { isAdmin = false } = {}) {
+    const adminControls = isAdmin ? `
+      <div>
+        <button class="mini-btn mini-btn-approve" onclick="adminUpdateShipment(${s.id}, 'approve')">Approve</button>
+        <button class="mini-btn mini-btn-block" onclick="adminUpdateShipment(${s.id}, 'block')">Block</button>
+      </div>
+      <div class="checkpoint-row">
+        <input type="text" placeholder="Location" id="loc-${s.id}">
+        <select id="status-${s.id}">
+          <option value="">Status (optional)</option>
+          <option value="in_transit">In Transit</option>
+          <option value="out_for_delivery">Out for Delivery</option>
+          <option value="delivered">Delivered</option>
+        </select>
+        <button class="mini-btn mini-btn-primary" onclick="addCheckpoint(${s.id})">Add Checkpoint</button>
+      </div>` : '';
+
+    return `
+      <div class="shipment-card">
+        <div class="shipment-card-top">
+          <strong class="mono" style="font-size:0.85rem;">${s.trackingId || ('#' + s.id)}</strong>
+          ${badgeHtml(s.status)}
+        </div>
+        <div class="shipment-route"><i class="fas fa-route"></i> ${s.origin} &rarr; ${s.destination} &middot; now at <strong>${s.currentLocation}</strong></div>
+        <div class="shipment-meta">${s.recipientName} &middot; ${s.items} &middot; $${s.value}</div>
+        ${adminControls}
+      </div>`;
+  }
+
+  async function loadMyShipments() {
+    const list = document.getElementById('myShipmentsList');
+    try {
+      const shipments = await apiRequest('/shipments');
+      list.innerHTML = shipments.length ? shipments.map(s => renderShipmentCard(s)).join('') : '<p class="empty-note">No shipments yet.</p>';
+    } catch (err) {
+      list.innerHTML = `<p class="empty-note">Could not load shipments: ${err.message}</p>`;
+    }
+  }
+
+  async function loadAdminShipments() {
+    if (!currentUser || currentUser.role !== 'admin') return;
+    const list = document.getElementById('adminShipmentsList');
+    try {
+      const shipments = await apiRequest('/admin/shipments');
+      list.innerHTML = shipments.length ? shipments.map(s => renderShipmentCard(s, { isAdmin: true })).join('') : '<p class="empty-note">No shipments in the system yet.</p>';
+    } catch (err) {
+      list.innerHTML = `<p class="empty-note">Could not load shipments: ${err.message}</p>`;
+    }
+  }
+
+  async function adminUpdateShipment(id, action) {
+    try { await apiRequest(`/admin/shipments/${id}/${action}`, { method: 'PUT' }); loadAdminShipments(); }
+    catch (err) { alert(`Failed to ${action} shipment: ${err.message}`); }
+  }
+
+  async function addCheckpoint(id) {
+    const location = document.getElementById(`loc-${id}`).value.trim();
+    const status = document.getElementById(`status-${id}`).value;
+    if (!location && !status) { alert('Enter a location and/or pick a status.'); return; }
+    try {
+      await apiRequest(`/admin/shipments/${id}/track`, { method: 'POST', body: JSON.stringify({ location, status }) });
+      loadAdminShipments();
+    } catch (err) { alert(`Failed to add checkpoint: ${err.message}`); }
+  }
+
+  window.adminUpdateShipment = adminUpdateShipment;
+  window.addCheckpoint = addCheckpoint;
+
+  function renderTrackingResult(s) {
+    const trackingResult = document.getElementById('trackingResult');
+    const events = [...s.trackingEvents].reverse();
+    trackingResult.innerHTML = `
+      <div class="result-card">
+        <div class="waybill-top">
+          <span class="waybill-id mono">${s.trackingId || ('#' + s.id)}</span>
+          <span class="live-dot"><span class="pulse"></span>Live</span>
+        </div>
+        <div class="route">
+          <div class="route-point"><div class="label">Origin</div><div class="place">${s.origin}</div></div>
+          <div class="route-line"><div class="mover"></div></div>
+          <div class="route-point" style="text-align:right;"><div class="label">Destination</div><div class="place">${s.destination}</div></div>
+        </div>
+        <div class="status-row">
+          ${badgeHtml(s.status)}
+          <span class="mono" style="color:var(--steel); font-size:0.85rem;">Currently: ${s.currentLocation}</span>
+        </div>
+        <div class="timeline">
+          ${events.map(e => `
+            <div class="timeline-item">
+              <div class="timeline-dot"></div>
+              <div class="timeline-content">
+                <div class="t-loc">${e.location} &middot; ${e.status.replace(/_/g,' ')}</div>
+                ${e.note ? `<div class="t-note">${e.note}</div>` : ''}
+                <div class="t-time">${new Date(e.timestamp).toLocaleString()}</div>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  }
+
+  async function trackShipment(idOrCode, { silent = false } = {}) {
+    const trackingNote = document.getElementById('trackingNote');
+    if (!authToken) { trackingNote.textContent = 'Sign in first — the backend requires authentication to look up a shipment.'; return; }
+    try {
+      const path = /^\d+$/.test(idOrCode) ? `/shipments/${idOrCode}` : `/shipments/tracking/${idOrCode}`;
+      const s = await apiRequest(path);
+      trackingNote.textContent = '';
+      renderTrackingResult(s);
+      return s;
+    } catch (err) {
+      if (!silent) trackingNote.textContent = `Could not find shipment: ${err.message}`;
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    updateAuthUI();
+
+    // Mobile nav toggle
+    document.getElementById('navToggle').addEventListener('click', () => {
+      document.getElementById('mainNav').classList.toggle('open');
+    });
+
+    // Customer auth modal
+    const authModal = document.getElementById('authModal');
+    const authAlert = document.getElementById('authAlert');
+    document.getElementById('signInBtn').addEventListener('click', () => { hideAlert(authAlert); authModal.classList.add('open'); });
+    document.getElementById('authModalClose').addEventListener('click', () => authModal.classList.remove('open'));
+    authModal.addEventListener('click', (e) => { if (e.target === authModal) authModal.classList.remove('open'); });
+
+    const loginTab = document.getElementById('loginTab');
+    const registerTab = document.getElementById('registerTab');
+    const loginForm = document.getElementById('loginForm');
+    const registerForm = document.getElementById('registerForm');
+    loginTab.addEventListener('click', () => {
+      loginTab.classList.add('active'); registerTab.classList.remove('active');
+      loginForm.style.display = 'block'; registerForm.style.display = 'none'; hideAlert(authAlert);
+    });
+    registerTab.addEventListener('click', () => {
+      registerTab.classList.add('active'); loginTab.classList.remove('active');
+      registerForm.style.display = 'block'; loginForm.style.display = 'none'; hideAlert(authAlert);
+    });
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault(); hideAlert(authAlert);
+      const email = document.getElementById('loginEmail').value;
+      const password = document.getElementById('loginPassword').value;
+      try {
+        const data = await apiRequest('/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+        setSession(data.token, data.user);
+        authModal.classList.remove('open'); loginForm.reset();
+      } catch (err) { showAlert(authAlert, err.message, 'error'); }
+    });
+
+    registerForm.addEventListener('submit', async (e) => {
+      e.preventDefault(); hideAlert(authAlert);
+      const username = document.getElementById('registerUsername').value;
+      const email = document.getElementById('registerEmail').value;
+      const password = document.getElementById('registerPassword').value;
+      try {
+        await apiRequest('/register', { method: 'POST', body: JSON.stringify({ username, email, password }) });
+        showAlert(authAlert, 'Account created! You can log in now.', 'success');
+        registerForm.reset(); loginTab.click();
+      } catch (err) { showAlert(authAlert, err.message, 'error'); }
+    });
+
+    // Admin modal (separate password, separate from customer accounts)
+    const adminModal = document.getElementById('adminModal');
+    const adminAlert = document.getElementById('adminAlert');
+    document.getElementById('adminAccessLink').addEventListener('click', (e) => {
+      e.preventDefault(); hideAlert(adminAlert); adminModal.classList.add('open');
+    });
+    document.getElementById('adminModalClose').addEventListener('click', () => adminModal.classList.remove('open'));
+    adminModal.addEventListener('click', (e) => { if (e.target === adminModal) adminModal.classList.remove('open'); });
+
+    document.getElementById('adminLoginForm').addEventListener('submit', async (e) => {
+      e.preventDefault(); hideAlert(adminAlert);
+      const password = document.getElementById('adminPassword').value;
+      try {
+        const data = await apiRequest('/admin/login', { method: 'POST', body: JSON.stringify({ password }) });
+        setSession(data.token, data.user);
+        adminModal.classList.remove('open');
+        document.getElementById('adminLoginForm').reset();
+        document.getElementById('dashboardSection').classList.add('open');
+        document.getElementById('dashboardSection').scrollIntoView({ behavior: 'smooth' });
+        loadAdminShipments();
+      } catch (err) { showAlert(adminAlert, err.message, 'error'); }
+    });
+
+    document.getElementById('signOutBtn').addEventListener('click', () => setSession(null, null));
+
+    document.getElementById('dashboardBtn').addEventListener('click', () => {
+      const section = document.getElementById('dashboardSection');
+      section.classList.add('open');
+      section.scrollIntoView({ behavior: 'smooth' });
+      if (currentUser && currentUser.role === 'admin') loadAdminShipments();
+      else loadMyShipments();
+    });
+
+    document.getElementById('createShipmentForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const dashboardAlert = document.getElementById('dashboardAlert');
+      hideAlert(dashboardAlert);
+      const recipientName = document.getElementById('shipRecipient').value;
+      const origin = document.getElementById('shipOrigin').value;
+      const destination = document.getElementById('shipDestination').value;
+      const items = document.getElementById('shipItems').value;
+      const value = parseFloat(document.getElementById('shipValue').value);
+      try {
+        const data = await apiRequest('/shipments', { method: 'POST', body: JSON.stringify({ recipientName, origin, destination, items, value }) });
+        showAlert(dashboardAlert, `${data.message} Tracking code: ${data.trackingId}`, 'success');
+        document.getElementById('createShipmentForm').reset();
+        loadMyShipments();
+      } catch (err) { showAlert(dashboardAlert, err.message, 'error'); }
+    });
+
+    // Track shipment — with live polling while a result is showing
+    document.getElementById('trackBtn').addEventListener('click', async () => {
+      const id = document.getElementById('trackingInput').value.trim();
+      document.getElementById('trackingResult').innerHTML = '';
+      if (trackPollInterval) { clearInterval(trackPollInterval); trackPollInterval = null; }
+      if (!id) { document.getElementById('trackingNote').textContent = 'Enter a shipment ID or tracking code.'; return; }
+
+      const result = await trackShipment(id);
+      if (result) {
+        trackPollInterval = setInterval(() => trackShipment(id, { silent: true }), 5000);
+      }
+    });
+
+    const featureCards = document.querySelectorAll('.feature-card');
+    featureCards.forEach(card => {
+      card.addEventListener('mouseenter', function () { this.style.transform = 'translateY(-6px)'; });
+      card.addEventListener('mouseleave', function () { this.style.transform = 'translateY(0)'; });
+    });
+  });
+</script>
+</body>
+</html>
