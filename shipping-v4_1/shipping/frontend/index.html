@@ -368,8 +368,19 @@
 <!-- Dashboard -->
 <section class="dashboard-section" id="dashboardSection">
   <div class="container">
-    <h2 class="section-title" id="dashboardTitle">Your Dashboard</h2>
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+      <h2 class="section-title" id="dashboardTitle" style="margin-bottom:0;">Your Dashboard</h2>
+      <button class="btn btn-outline" id="notifBell" style="display:none; position:relative;">
+        <i class="fas fa-bell"></i> Notifications
+        <span id="notifBadge" style="display:none; position:absolute; top:-8px; right:-8px; background:var(--danger); color:#fff; border-radius:50%; width:20px; height:20px; font-size:0.72rem; align-items:center; justify-content:center;">0</span>
+      </button>
+    </div>
     <div class="alert-box" id="dashboardAlert"></div>
+
+    <div class="panel" id="notifPanel" style="display:none; margin-bottom:24px;">
+      <h3>Notifications</h3>
+      <div id="notifList"><p class="empty-note">No notifications.</p></div>
+    </div>
 
     <div class="dashboard-grid" id="customerPanels">
       <div class="panel">
@@ -458,7 +469,7 @@
 
     <div class="track-panel" id="track">
       <h3 style="margin-bottom:6px;">Track a Shipment</h3>
-      <p class="section-sub" style="margin-bottom:20px;">Enter a shipment ID or tracking code. Sign in first — lookups are authenticated.</p>
+      <p class="section-sub" style="margin-bottom:20px;">Enter a shipment ID or tracking code. No account needed.</p>
       <div class="track-form">
         <input type="text" id="trackingInput" placeholder="Tracking code (e.g. SHP-XXXXXXXX)">
         <button class="btn btn-gold" id="trackBtn">Track</button>
@@ -598,7 +609,7 @@
   // Local dev talks to your backend on localhost. Once you deploy the backend
   // (e.g. to Render), replace the string below with its real URL —
   // e.g. 'https://your-backend-name.onrender.com' — no trailing slash.
-  const DEPLOYED_API_BASE = 'https://globalship.onrender.com';
+  const DEPLOYED_API_BASE = 'https://https://globalship.onrender.com';
   const API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
     ? 'http://localhost:3000'
     : DEPLOYED_API_BASE;
@@ -639,6 +650,7 @@
     const adminPanel = document.getElementById('adminPanel');
     const customerPanels = document.getElementById('customerPanels');
     const dashboardTitle = document.getElementById('dashboardTitle');
+    const notifBell = document.getElementById('notifBell');
 
     if (currentUser) {
       welcomeText.style.display = 'inline';
@@ -651,11 +663,13 @@
       adminPanel.style.display = isAdmin ? 'block' : 'none';
       customerPanels.style.display = isAdmin ? 'none' : 'grid';
       dashboardTitle.textContent = isAdmin ? 'Admin Dashboard' : 'Your Dashboard';
+      notifBell.style.display = isAdmin ? 'inline-block' : 'none';
     } else {
       welcomeText.style.display = 'none';
       signInBtn.style.display = 'inline-block';
       dashboardBtn.style.display = 'none';
       signOutBtn.style.display = 'none';
+      notifBell.style.display = 'none';
       document.getElementById('dashboardSection').classList.remove('open');
     }
   }
@@ -714,6 +728,45 @@
     }
   }
 
+  // Just refreshes the unread-count badge on the bell (used on login, without opening the panel)
+  async function refreshNotifBadge() {
+    if (!currentUser || currentUser.role !== 'admin') return;
+    try {
+      const notifications = await apiRequest('/admin/notifications');
+      const unread = notifications.filter(n => !n.read).length;
+      const badge = document.getElementById('notifBadge');
+      if (unread > 0) {
+        badge.textContent = unread > 9 ? '9+' : unread;
+        badge.style.display = 'flex';
+      } else {
+        badge.style.display = 'none';
+      }
+    } catch (err) { /* silent — badge just stays as-is */ }
+  }
+
+  // Loads and displays the full notification list, and marks them read
+  async function loadAdminNotifications() {
+    if (!currentUser || currentUser.role !== 'admin') return;
+    const list = document.getElementById('notifList');
+    try {
+      const notifications = await apiRequest('/admin/notifications');
+      list.innerHTML = notifications.length
+        ? notifications.map(n => `
+            <div class="shipment-card">
+              <div style="font-size:0.9rem;">${n.message}</div>
+              <div class="t-time mono" style="color:var(--steel); font-size:0.76rem; margin-top:4px;">${new Date(n.createdAt).toLocaleString()}</div>
+            </div>`).join('')
+        : '<p class="empty-note">No notifications.</p>';
+
+      if (notifications.some(n => !n.read)) {
+        await apiRequest('/admin/notifications/mark-read', { method: 'PUT' });
+      }
+      refreshNotifBadge();
+    } catch (err) {
+      list.innerHTML = `<p class="empty-note">Could not load notifications: ${err.message}</p>`;
+    }
+  }
+
   async function adminUpdateShipment(id, action) {
     try { await apiRequest(`/admin/shipments/${id}/${action}`, { method: 'PUT' }); loadAdminShipments(); }
     catch (err) { alert(`Failed to ${action} shipment: ${err.message}`); }
@@ -766,7 +819,6 @@
 
   async function trackShipment(idOrCode, { silent = false } = {}) {
     const trackingNote = document.getElementById('trackingNote');
-    if (!authToken) { trackingNote.textContent = 'Sign in first — the backend requires authentication to look up a shipment.'; return; }
     try {
       const isTrackingCode = /^shp-/i.test(idOrCode.trim());
       const path = isTrackingCode ? `/shipments/tracking/${idOrCode.trim()}` : `/shipments/${idOrCode.trim()}`;
@@ -781,6 +833,7 @@
 
   document.addEventListener('DOMContentLoaded', function () {
     updateAuthUI();
+    refreshNotifBadge();
 
     // Mobile nav toggle
     document.getElementById('navToggle').addEventListener('click', () => {
@@ -850,16 +903,24 @@
         document.getElementById('dashboardSection').classList.add('open');
         document.getElementById('dashboardSection').scrollIntoView({ behavior: 'smooth' });
         loadAdminShipments();
+        refreshNotifBadge();
       } catch (err) { showAlert(adminAlert, err.message, 'error'); }
     });
 
     document.getElementById('signOutBtn').addEventListener('click', () => setSession(null, null));
 
+    document.getElementById('notifBell').addEventListener('click', () => {
+      const panel = document.getElementById('notifPanel');
+      const isOpen = panel.style.display === 'block';
+      panel.style.display = isOpen ? 'none' : 'block';
+      if (!isOpen) loadAdminNotifications();
+    });
+
     document.getElementById('dashboardBtn').addEventListener('click', () => {
       const section = document.getElementById('dashboardSection');
       section.classList.add('open');
       section.scrollIntoView({ behavior: 'smooth' });
-      if (currentUser && currentUser.role === 'admin') loadAdminShipments();
+      if (currentUser && currentUser.role === 'admin') { loadAdminShipments(); refreshNotifBadge(); }
       else loadMyShipments();
     });
 
@@ -898,6 +959,14 @@
       card.addEventListener('mouseenter', function () { this.style.transform = 'translateY(-6px)'; });
       card.addEventListener('mouseleave', function () { this.style.transform = 'translateY(0)'; });
     });
+
+    // Deep link from tracking emails: yoursite.com/?track=SHP-XXXXXXXX
+    const deepLinkCode = new URLSearchParams(window.location.search).get('track');
+    if (deepLinkCode) {
+      document.getElementById('trackingInput').value = deepLinkCode;
+      document.getElementById('track').scrollIntoView({ behavior: 'smooth' });
+      document.getElementById('trackBtn').click();
+    }
   });
 </script>
 </body>
