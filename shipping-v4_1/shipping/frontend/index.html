@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Work+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root{
     --ink:#0a0c10;
@@ -386,10 +388,14 @@
       <div class="panel">
         <h3>Create Shipment</h3>
         <form id="createShipmentForm">
+          <div class="form-field"><label>Sender Name</label><input type="text" id="shipSenderName" required></div>
+          <div class="form-field"><label>Sender Email</label><input type="email" id="shipSenderEmail" required></div>
           <div class="form-field"><label>Recipient Name</label><input type="text" id="shipRecipient" required></div>
           <div class="form-field"><label>Dispatch Location (Origin)</label><input type="text" id="shipOrigin" placeholder="e.g. New York, US" required></div>
           <div class="form-field"><label>Destination</label><input type="text" id="shipDestination" placeholder="e.g. London, UK" required></div>
           <div class="form-field"><label>Items</label><input type="text" id="shipItems" placeholder="e.g. 2x laptop, 1x charger" required></div>
+          <div class="form-field"><label>Weight (kg)</label><input type="number" id="shipWeight" min="0" step="0.1" required></div>
+          <div class="form-field"><label>Estimated Transit Days</label><input type="number" id="shipTransitDays" min="1" step="1" placeholder="e.g. 5" required></div>
           <div class="form-field"><label>Declared Value ($)</label><input type="number" id="shipValue" min="0" step="0.01" required></div>
           <button type="submit" class="form-submit-btn">Create Shipment</button>
         </form>
@@ -788,6 +794,10 @@
   function renderTrackingResult(s) {
     const trackingResult = document.getElementById('trackingResult');
     const events = [...s.trackingEvents].reverse();
+    const eta = s.estimatedDeliveryDate
+      ? `${new Date(s.estimatedDeliveryDate).toDateString()} (${s.estimatedTransitDays} day${s.estimatedTransitDays === 1 ? '' : 's'})`
+      : 'Not set';
+
     trackingResult.innerHTML = `
       <div class="result-card">
         <div class="waybill-top">
@@ -803,6 +813,16 @@
           ${badgeHtml(s.status)}
           <span class="mono" style="color:var(--steel); font-size:0.85rem;">Currently: ${s.currentLocation}</span>
         </div>
+
+        <div id="trackingMap" style="height:280px; border-radius:10px; overflow:hidden; margin-top:18px; border:1px solid var(--line);"></div>
+
+        <div class="shipment-meta-grid" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; margin-top:18px; padding-top:18px; border-top:1px solid var(--line);">
+          <div><div class="label" style="font-size:0.68rem; color:var(--steel); text-transform:uppercase; letter-spacing:0.06em;">Sender</div><div style="font-size:0.9rem;">${s.senderName || '—'}</div><div style="font-size:0.78rem; color:var(--steel);">${s.senderEmail || ''}</div></div>
+          <div><div class="label" style="font-size:0.68rem; color:var(--steel); text-transform:uppercase; letter-spacing:0.06em;">Recipient</div><div style="font-size:0.9rem;">${s.recipientName || '—'}</div></div>
+          <div><div class="label" style="font-size:0.68rem; color:var(--steel); text-transform:uppercase; letter-spacing:0.06em;">Weight</div><div style="font-size:0.9rem;">${s.weight ? s.weight + ' kg' : '—'}</div></div>
+          <div><div class="label" style="font-size:0.68rem; color:var(--steel); text-transform:uppercase; letter-spacing:0.06em;">Estimated Delivery</div><div style="font-size:0.9rem;">${eta}</div></div>
+        </div>
+
         <div class="timeline">
           ${events.map(e => `
             <div class="timeline-item">
@@ -815,6 +835,53 @@
             </div>`).join('')}
         </div>
       </div>`;
+
+    renderTrackingMap(s);
+  }
+
+  // Live route map (Leaflet + OpenStreetMap — free, no API key). Rebuilt on
+  // every refresh since the tracking card's HTML is fully replaced each poll.
+  let leafletMap = null;
+  function renderTrackingMap(s) {
+    const mapDiv = document.getElementById('trackingMap');
+    if (!mapDiv || typeof L === 'undefined') return;
+
+    if (leafletMap) { leafletMap.remove(); leafletMap = null; }
+
+    const routePoints = [];
+    if (s.originCoords) routePoints.push([s.originCoords.lat, s.originCoords.lng]);
+    (s.trackingEvents || []).forEach(e => { if (typeof e.lat === 'number' && typeof e.lng === 'number') routePoints.push([e.lat, e.lng]); });
+    if (s.currentCoords) routePoints.push([s.currentCoords.lat, s.currentCoords.lng]);
+
+    if (routePoints.length === 0) {
+      mapDiv.innerHTML = '<p class="empty-note" style="padding:20px;">Map unavailable for these locations.</p>';
+      return;
+    }
+
+    leafletMap = L.map(mapDiv, { attributionControl: true }).setView(routePoints[routePoints.length - 1], 4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 18
+    }).addTo(leafletMap);
+
+    if (s.originCoords) L.marker([s.originCoords.lat, s.originCoords.lng]).addTo(leafletMap).bindPopup('Origin: ' + s.origin);
+    if (s.destinationCoords) L.marker([s.destinationCoords.lat, s.destinationCoords.lng]).addTo(leafletMap).bindPopup('Destination: ' + s.destination);
+    if (s.currentCoords) {
+      L.circleMarker([s.currentCoords.lat, s.currentCoords.lng], { radius: 8, color: '#4f8cff', fillColor: '#4f8cff', fillOpacity: 0.8 })
+        .addTo(leafletMap).bindPopup('Current: ' + s.currentLocation);
+    }
+
+    if (routePoints.length > 1) {
+      L.polyline(routePoints, { color: '#4f8cff', weight: 3 }).addTo(leafletMap);
+    }
+    if (s.currentCoords && s.destinationCoords) {
+      L.polyline([[s.currentCoords.lat, s.currentCoords.lng], [s.destinationCoords.lat, s.destinationCoords.lng]], {
+        color: '#8791a0', weight: 2, dashArray: '6 8'
+      }).addTo(leafletMap);
+    }
+
+    const boundsPoints = routePoints.concat(s.destinationCoords ? [[s.destinationCoords.lat, s.destinationCoords.lng]] : []);
+    leafletMap.fitBounds(L.latLngBounds(boundsPoints), { padding: [30, 30] });
   }
 
   async function trackShipment(idOrCode, { silent = false } = {}) {
@@ -928,13 +995,20 @@
       e.preventDefault();
       const dashboardAlert = document.getElementById('dashboardAlert');
       hideAlert(dashboardAlert);
+      const senderName = document.getElementById('shipSenderName').value;
+      const senderEmail = document.getElementById('shipSenderEmail').value;
       const recipientName = document.getElementById('shipRecipient').value;
       const origin = document.getElementById('shipOrigin').value;
       const destination = document.getElementById('shipDestination').value;
       const items = document.getElementById('shipItems').value;
+      const weight = parseFloat(document.getElementById('shipWeight').value);
+      const estimatedTransitDays = parseInt(document.getElementById('shipTransitDays').value, 10);
       const value = parseFloat(document.getElementById('shipValue').value);
       try {
-        const data = await apiRequest('/shipments', { method: 'POST', body: JSON.stringify({ recipientName, origin, destination, items, value }) });
+        const data = await apiRequest('/shipments', {
+          method: 'POST',
+          body: JSON.stringify({ senderName, senderEmail, recipientName, origin, destination, items, weight, estimatedTransitDays, value })
+        });
         showAlert(dashboardAlert, `${data.message} Tracking code: ${data.trackingId}`, 'success');
         document.getElementById('createShipmentForm').reset();
         loadMyShipments();
