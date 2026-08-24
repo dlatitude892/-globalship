@@ -460,7 +460,7 @@
       <h3 style="margin-bottom:6px;">Track a Shipment</h3>
       <p class="section-sub" style="margin-bottom:20px;">Enter a shipment ID or tracking code. Sign in first — lookups are authenticated.</p>
       <div class="track-form">
-        <input type="text" id="trackingInput" placeholder="Shipment ID (e.g. 1) or tracking code (e.g. SHP-XXXX-0001)">
+        <input type="text" id="trackingInput" placeholder="Tracking code (e.g. SHP-XXXXXXXX)">
         <button class="btn btn-gold" id="trackBtn">Track</button>
       </div>
       <p id="trackingNote" class="empty-note"></p>
@@ -667,8 +667,8 @@
   function renderShipmentCard(s, { isAdmin = false } = {}) {
     const adminControls = isAdmin ? `
       <div>
-        <button class="mini-btn mini-btn-approve" onclick="adminUpdateShipment(${s.id}, 'approve')">Approve</button>
-        <button class="mini-btn mini-btn-block" onclick="adminUpdateShipment(${s.id}, 'block')">Block</button>
+        <button class="mini-btn mini-btn-approve" onclick="adminUpdateShipment('${s.id}', 'approve')">Approve</button>
+        <button class="mini-btn mini-btn-block" onclick="adminUpdateShipment('${s.id}', 'block')">Block</button>
       </div>
       <div class="checkpoint-row">
         <input type="text" placeholder="Location" id="loc-${s.id}">
@@ -678,7 +678,7 @@
           <option value="out_for_delivery">Out for Delivery</option>
           <option value="delivered">Delivered</option>
         </select>
-        <button class="mini-btn mini-btn-primary" onclick="addCheckpoint(${s.id})">Add Checkpoint</button>
+        <button class="mini-btn mini-btn-primary" onclick="addCheckpoint('${s.id}')">Add Checkpoint</button>
       </div>` : '';
 
     return `
@@ -768,7 +768,8 @@
     const trackingNote = document.getElementById('trackingNote');
     if (!authToken) { trackingNote.textContent = 'Sign in first — the backend requires authentication to look up a shipment.'; return; }
     try {
-      const path = /^\d+$/.test(idOrCode) ? `/shipments/${idOrCode}` : `/shipments/tracking/${idOrCode}`;
+      const isTrackingCode = /^shp-/i.test(idOrCode.trim());
+      const path = isTrackingCode ? `/shipments/tracking/${idOrCode.trim()}` : `/shipments/${idOrCode.trim()}`;
       const s = await apiRequest(path);
       trackingNote.textContent = '';
       renderTrackingResult(s);
