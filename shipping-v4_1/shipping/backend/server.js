@@ -89,6 +89,31 @@ const emailWrapper = (title, bodyHtml) => `
   </div>
 `;
 
+// ---- Geocoding (free, no API key — OpenStreetMap's Nominatim) ----
+// Converts a location string like "New York, US" into {lat, lng} so the
+// frontend can plot it on a live map. Nominatim's usage policy asks for a
+// descriptive User-Agent and no more than ~1 request/sec — fine for this
+// app's scale (geocoding only happens when a shipment is created or a
+// checkpoint is added, not on every page view). For heavier traffic, swap
+// this for a paid geocoding provider.
+const NOMINATIM_UA = `GlobalShipTracker/1.0 (${ADMIN_EMAIL || 'no-contact-set@example.com'})`;
+const geocode = async (query) => {
+  if (!query) return null;
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`,
+      { headers: { 'User-Agent': NOMINATIM_UA } }
+    );
+    const data = await res.json();
+    if (data && data[0]) {
+      return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+    }
+  } catch (err) {
+    console.error('[GEOCODE] Failed for', query, '-', err.message);
+  }
+  return null;
+};
+
 // ---- Models ----
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true },
@@ -103,19 +128,31 @@ const trackingEventSchema = new mongoose.Schema({
   location: String,
   status: String,
   note: String,
+  lat: Number,
+  lng: Number,
   timestamp: { type: Date, default: Date.now }
 }, { _id: false });
+
+const coordsSchema = new mongoose.Schema({ lat: Number, lng: Number }, { _id: false });
 
 const shipmentSchema = new mongoose.Schema({
   trackingId: { type: String, required: true, unique: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   recipientName: String,
+  senderName: String,
+  senderEmail: String,
   origin: String,
   destination: String,
   items: String,
   value: Number,
+  weight: Number, // kg
+  estimatedTransitDays: Number,
+  estimatedDeliveryDate: Date,
   status: { type: String, default: 'pending' },
   currentLocation: String,
+  originCoords: coordsSchema,
+  destinationCoords: coordsSchema,
+  currentCoords: coordsSchema,
   trackingEvents: [trackingEventSchema],
   createdAt: { type: Date, default: Date.now }
 });
@@ -136,12 +173,20 @@ const shipmentToJSON = (s) => ({
   trackingId: s.trackingId,
   userId: s.userId.toString(),
   recipientName: s.recipientName,
+  senderName: s.senderName,
+  senderEmail: s.senderEmail,
   origin: s.origin,
   destination: s.destination,
   items: s.items,
   value: s.value,
+  weight: s.weight,
+  estimatedTransitDays: s.estimatedTransitDays,
+  estimatedDeliveryDate: s.estimatedDeliveryDate,
   status: s.status,
   currentLocation: s.currentLocation,
+  originCoords: s.originCoords,
+  destinationCoords: s.destinationCoords,
+  currentCoords: s.currentCoords,
   trackingEvents: s.trackingEvents,
   createdAt: s.createdAt
 });
@@ -169,12 +214,19 @@ const authLimiter = rateLimit({
 
 // Adds a checkpoint to a shipment's tracking history and saves it
 const addTrackingEvent = async (shipment, { location, status, note }) => {
-  if (location) shipment.currentLocation = location;
+  let coords = null;
+  if (location) {
+    shipment.currentLocation = location;
+    coords = await geocode(location);
+    if (coords) shipment.currentCoords = coords;
+  }
   if (status) shipment.status = status;
   shipment.trackingEvents.push({
     location: location || shipment.currentLocation,
     status: status || shipment.status,
     note: note || '',
+    lat: coords ? coords.lat : (shipment.currentCoords ? shipment.currentCoords.lat : undefined),
+    lng: coords ? coords.lng : (shipment.currentCoords ? shipment.currentCoords.lng : undefined),
     timestamp: new Date()
   });
   await shipment.save();
@@ -362,22 +414,50 @@ app.get('/admin/shipments', authenticateToken, requireAdmin, async (req, res) =>
 // Create shipment — goes straight to "pending", waiting on admin approval
 app.post('/shipments', authenticateToken, async (req, res) => {
   try {
-    const { recipientName, origin, destination, items, value } = req.body;
+    const {
+      recipientName, senderName, senderEmail, origin, destination,
+      items, value, weight, estimatedTransitDays
+    } = req.body;
 
     const trackingId = await generateTrackingId();
+
+    // Best-effort geocoding — a shipment can still be created even if lookup fails
+    const [originCoords, destinationCoords] = await Promise.all([
+      geocode(origin),
+      geocode(destination)
+    ]);
+
+    const days = estimatedTransitDays ? parseInt(estimatedTransitDays, 10) : null;
+    const estimatedDeliveryDate = days
+      ? new Date(Date.now() + days * 24 * 60 * 60 * 1000)
+      : null;
 
     const newShipment = await Shipment.create({
       trackingId,
       userId: req.user.id,
       recipientName,
+      senderName,
+      senderEmail,
       origin,
       destination,
       items,
       value,
+      weight,
+      estimatedTransitDays: days,
+      estimatedDeliveryDate,
       status: 'pending',
       currentLocation: origin,
+      originCoords,
+      destinationCoords,
+      currentCoords: originCoords,
       trackingEvents: [
-        { location: origin, status: 'pending', note: 'Shipment created, awaiting admin approval', timestamp: new Date() }
+        {
+          location: origin, status: 'pending',
+          note: 'Shipment created, awaiting admin approval',
+          lat: originCoords ? originCoords.lat : undefined,
+          lng: originCoords ? originCoords.lng : undefined,
+          timestamp: new Date()
+        }
       ]
     });
 
@@ -387,6 +467,7 @@ app.post('/shipments', authenticateToken, async (req, res) => {
       html: emailWrapper('Shipment Created', `
         <p>Your shipment from <strong>${origin}</strong> to <strong>${destination}</strong> has been created and is awaiting approval.</p>
         <p style="font-family:monospace;background:#1b1f27;padding:10px 14px;border-radius:6px;display:inline-block;">${trackingId}</p>
+        ${estimatedDeliveryDate ? `<p>Estimated delivery: ${estimatedDeliveryDate.toDateString()} (${days} day${days === 1 ? '' : 's'})</p>` : ''}
         <p>Track it anytime: <a href="${FRONTEND_URL}/?track=${trackingId}" style="color:#4f8cff;">${FRONTEND_URL}/?track=${trackingId}</a></p>
       `)
     });
