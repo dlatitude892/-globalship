@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const nodemailer = require('nodemailer');
 const app = express();
 
 // ---- Security-critical config (set these as real environment variables in production) ----
@@ -24,10 +25,10 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'ChangeMe-Admin-2026';
 // allowing any origin, which is fine for local development only.
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
 
+// Used to build links inside emails (e.g. back to the tracking page)
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:8080';
+
 // ---- Database ----
-// Data is persisted in MongoDB Atlas (or any Mongo instance) instead of
-// living only in memory, so it survives restarts, redeploys, and Render's
-// free-tier spin-downs.
 const MONGODB_URI = process.env.MONGODB_URI;
 if (!MONGODB_URI) {
   console.error(
@@ -44,6 +45,51 @@ mongoose.connect(MONGODB_URI)
     process.exit(1);
   });
 
+// ---- Email (SMTP — works with any custom-domain webmail: cPanel, Zoho, etc.) ----
+// All of SMTP_HOST/PORT/USER/PASS must be set for email to actually send.
+// If they're missing, the app still runs fine — emails are just skipped with a
+// warning logged, so this never blocks registration or shipment creation.
+const SMTP_HOST = process.env.SMTP_HOST;
+const SMTP_PORT = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 587;
+const SMTP_SECURE = process.env.SMTP_SECURE === 'true'; // true for port 465, false for 587/STARTTLS
+const SMTP_USER = process.env.SMTP_USER;
+const SMTP_PASS = process.env.SMTP_PASS;
+const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER; // e.g. "GlobalShip <info@yourdomain.com>"
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL; // where new-signup notification emails go
+
+let transporter = null;
+if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
+  transporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
+    auth: { user: SMTP_USER, pass: SMTP_PASS }
+  });
+} else {
+  console.warn('[WARNING] SMTP_HOST/SMTP_USER/SMTP_PASS not fully set — emails will be skipped.');
+}
+
+// Best-effort email send — never throws, never blocks the calling request.
+const sendMail = async ({ to, subject, html }) => {
+  if (!transporter) return;
+  try {
+    await transporter.sendMail({ from: SMTP_FROM, to, subject, html });
+  } catch (err) {
+    console.error(`[EMAIL] Failed to send "${subject}" to ${to}:`, err.message);
+  }
+};
+
+const emailWrapper = (title, bodyHtml) => `
+  <div style="font-family:Arial,sans-serif;background:#0a0c10;padding:32px;color:#f2f0ea;">
+    <div style="max-width:520px;margin:0 auto;background:#14171d;border:1px solid #262b34;border-radius:12px;padding:28px;">
+      <h2 style="color:#d4a017;margin-top:0;">${title}</h2>
+      ${bodyHtml}
+      <p style="color:#8791a0;font-size:12px;margin-top:28px;">GlobalShip &middot; APM Terminals Port Elizabeth, NJ</p>
+    </div>
+  </div>
+`;
+
+// ---- Models ----
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true },
   email: { type: String, required: true, unique: true },
@@ -75,6 +121,15 @@ const shipmentSchema = new mongoose.Schema({
 });
 const Shipment = mongoose.model('Shipment', shipmentSchema);
 
+// Notifications shown on the admin dashboard (e.g. "new customer registered")
+const notificationSchema = new mongoose.Schema({
+  type: { type: String, required: true },
+  message: { type: String, required: true },
+  read: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+});
+const Notification = mongoose.model('Notification', notificationSchema);
+
 // Shapes a Mongo document into the plain JSON shape the frontend already expects
 const shipmentToJSON = (s) => ({
   id: s._id.toString(),
@@ -89,6 +144,14 @@ const shipmentToJSON = (s) => ({
   currentLocation: s.currentLocation,
   trackingEvents: s.trackingEvents,
   createdAt: s.createdAt
+});
+
+const notificationToJSON = (n) => ({
+  id: n._id.toString(),
+  type: n.type,
+  message: n.message,
+  read: n.read,
+  createdAt: n.createdAt
 });
 
 app.use(helmet());
@@ -171,8 +234,34 @@ app.post('/register', authLimiter, async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-
     await User.create({ username, email, password: hashedPassword, role: 'user' });
+
+    // Notify admin (dashboard notification + email) and welcome the new user.
+    // Both are best-effort — neither blocks or fails the registration itself.
+    await Notification.create({
+      type: 'new_user',
+      message: `New customer registered: ${username} (${email})`
+    });
+
+    if (ADMIN_EMAIL) {
+      sendMail({
+        to: ADMIN_EMAIL,
+        subject: 'New customer registered on GlobalShip',
+        html: emailWrapper('New Customer', `
+          <p><strong>${username}</strong> just created an account.</p>
+          <p style="color:#8791a0;">${email}</p>
+        `)
+      });
+    }
+
+    sendMail({
+      to: email,
+      subject: 'Welcome to GlobalShip',
+      html: emailWrapper('Welcome, ' + username, `
+        <p>Your account has been created. You can now sign in and create shipments.</p>
+      `)
+    });
+
     res.status(201).json({ message: 'User registered successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -241,6 +330,25 @@ app.post('/login', authLimiter, async (req, res) => {
   }
 });
 
+// Admin: notifications (new signups, etc.)
+app.get('/admin/notifications', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const notifications = await Notification.find().sort({ createdAt: -1 }).limit(50);
+    res.json(notifications.map(notificationToJSON));
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/admin/notifications/mark-read', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    await Notification.updateMany({ read: false }, { $set: { read: true } });
+    res.json({ message: 'Notifications marked as read' });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Get all shipments (for admin)
 app.get('/admin/shipments', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -251,7 +359,7 @@ app.get('/admin/shipments', authenticateToken, requireAdmin, async (req, res) =>
   }
 });
 
-// Create shipment — goes straight to "pending", waiting on admin approval (no OTP step)
+// Create shipment — goes straight to "pending", waiting on admin approval
 app.post('/shipments', authenticateToken, async (req, res) => {
   try {
     const { recipientName, origin, destination, items, value } = req.body;
@@ -273,6 +381,16 @@ app.post('/shipments', authenticateToken, async (req, res) => {
       ]
     });
 
+    sendMail({
+      to: req.user.email,
+      subject: `Shipment created — ${trackingId}`,
+      html: emailWrapper('Shipment Created', `
+        <p>Your shipment from <strong>${origin}</strong> to <strong>${destination}</strong> has been created and is awaiting approval.</p>
+        <p style="font-family:monospace;background:#1b1f27;padding:10px 14px;border-radius:6px;display:inline-block;">${trackingId}</p>
+        <p>Track it anytime: <a href="${FRONTEND_URL}/?track=${trackingId}" style="color:#4f8cff;">${FRONTEND_URL}/?track=${trackingId}</a></p>
+      `)
+    });
+
     res.status(201).json({
       message: 'Shipment created successfully. Awaiting admin approval.',
       shipmentId: newShipment._id.toString(),
@@ -282,6 +400,25 @@ app.post('/shipments', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+// Sends a status-update email to the shipment's owner — best-effort, never throws
+const notifyShipmentOwner = async (shipment, subjectStatus) => {
+  try {
+    const owner = await User.findById(shipment.userId);
+    if (!owner) return;
+    sendMail({
+      to: owner.email,
+      subject: `Shipment update — ${shipment.trackingId} is now ${subjectStatus}`,
+      html: emailWrapper('Shipment Update', `
+        <p>Your shipment <strong>${shipment.trackingId}</strong> is now <strong>${subjectStatus.replace(/_/g, ' ')}</strong>.</p>
+        <p>Current location: ${shipment.currentLocation}</p>
+        <p>Track it anytime: <a href="${FRONTEND_URL}/?track=${shipment.trackingId}" style="color:#4f8cff;">${FRONTEND_URL}/?track=${shipment.trackingId}</a></p>
+      `)
+    });
+  } catch (err) {
+    console.error('[EMAIL] Could not notify shipment owner:', err.message);
+  }
+};
 
 // Admin: Block a shipment
 app.put('/admin/shipments/:id/block', authenticateToken, requireAdmin, async (req, res) => {
@@ -293,6 +430,7 @@ app.put('/admin/shipments/:id/block', authenticateToken, requireAdmin, async (re
     }
 
     await addTrackingEvent(shipment, { status: 'blocked', note: 'Shipment blocked' });
+    notifyShipmentOwner(shipment, 'blocked');
     res.json({ message: 'Shipment blocked successfully', shipment: shipmentToJSON(shipment) });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -309,6 +447,7 @@ app.put('/admin/shipments/:id/approve', authenticateToken, requireAdmin, async (
     }
 
     await addTrackingEvent(shipment, { status: 'approved', note: 'Shipment approved for onward delivery' });
+    notifyShipmentOwner(shipment, 'approved');
     res.json({ message: 'Shipment approved successfully', shipment: shipmentToJSON(shipment) });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -329,6 +468,7 @@ app.post('/admin/shipments/:id/track', authenticateToken, requireAdmin, async (r
     }
 
     await addTrackingEvent(shipment, { location, status, note });
+    if (status) notifyShipmentOwner(shipment, status);
     res.json({ message: 'Tracking checkpoint added', shipment: shipmentToJSON(shipment) });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -345,17 +485,15 @@ app.get('/shipments', authenticateToken, async (req, res) => {
   }
 });
 
-// Get shipment status by tracking ID (e.g. SHP-XXXXXXXX)
-app.get('/shipments/tracking/:trackingId', authenticateToken, async (req, res) => {
+// Public tracking lookup by tracking ID (e.g. SHP-XXXXXXXX) — no login required,
+// same as any real carrier's tracking page. Only exposes shipment/route info,
+// never account credentials.
+app.get('/shipments/tracking/:trackingId', async (req, res) => {
   try {
     const shipment = await Shipment.findOne({ trackingId: req.params.trackingId });
 
     if (!shipment) {
       return res.status(404).json({ error: 'Shipment not found' });
-    }
-
-    if (shipment.userId.toString() !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Access denied' });
     }
 
     res.json(shipmentToJSON(shipment));
@@ -364,17 +502,13 @@ app.get('/shipments/tracking/:trackingId', authenticateToken, async (req, res) =
   }
 });
 
-// Get shipment status
-app.get('/shipments/:id', authenticateToken, async (req, res) => {
+// Public tracking lookup by raw shipment ID — no login required
+app.get('/shipments/:id', async (req, res) => {
   try {
     const shipment = await Shipment.findById(req.params.id);
 
     if (!shipment) {
       return res.status(404).json({ error: 'Shipment not found' });
-    }
-
-    if (shipment.userId.toString() !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Access denied' });
     }
 
     res.json(shipmentToJSON(shipment));
