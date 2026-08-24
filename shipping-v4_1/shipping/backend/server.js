@@ -1,6 +1,7 @@
 // server.js
 require('dotenv').config();
 const express = require('express');
+const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
@@ -23,6 +24,73 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'ChangeMe-Admin-2026';
 // allowing any origin, which is fine for local development only.
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
 
+// ---- Database ----
+// Data is persisted in MongoDB Atlas (or any Mongo instance) instead of
+// living only in memory, so it survives restarts, redeploys, and Render's
+// free-tier spin-downs.
+const MONGODB_URI = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+  console.error(
+    '[FATAL] MONGODB_URI is not set. Create a free MongoDB Atlas cluster and set\n' +
+    '        MONGODB_URI to its connection string before starting this server.'
+  );
+  process.exit(1);
+}
+
+mongoose.connect(MONGODB_URI)
+  .then(() => console.log('Connected to MongoDB'))
+  .catch((err) => {
+    console.error('[FATAL] Could not connect to MongoDB:', err.message);
+    process.exit(1);
+  });
+
+const userSchema = new mongoose.Schema({
+  username: { type: String, required: true },
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  role: { type: String, default: 'user' },
+  createdAt: { type: Date, default: Date.now }
+});
+const User = mongoose.model('User', userSchema);
+
+const trackingEventSchema = new mongoose.Schema({
+  location: String,
+  status: String,
+  note: String,
+  timestamp: { type: Date, default: Date.now }
+}, { _id: false });
+
+const shipmentSchema = new mongoose.Schema({
+  trackingId: { type: String, required: true, unique: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  recipientName: String,
+  origin: String,
+  destination: String,
+  items: String,
+  value: Number,
+  status: { type: String, default: 'pending' },
+  currentLocation: String,
+  trackingEvents: [trackingEventSchema],
+  createdAt: { type: Date, default: Date.now }
+});
+const Shipment = mongoose.model('Shipment', shipmentSchema);
+
+// Shapes a Mongo document into the plain JSON shape the frontend already expects
+const shipmentToJSON = (s) => ({
+  id: s._id.toString(),
+  trackingId: s.trackingId,
+  userId: s.userId.toString(),
+  recipientName: s.recipientName,
+  origin: s.origin,
+  destination: s.destination,
+  items: s.items,
+  value: s.value,
+  status: s.status,
+  currentLocation: s.currentLocation,
+  trackingEvents: s.trackingEvents,
+  createdAt: s.createdAt
+});
+
 app.use(helmet());
 app.use(express.json());
 app.use(cors({ origin: ALLOWED_ORIGIN }));
@@ -36,13 +104,8 @@ const authLimiter = rateLimit({
   message: { error: 'Too many attempts. Please try again later.' }
 });
 
-// In-memory storage — resets on every restart/deploy.
-// Fine for a demo; use a real database (Postgres, Mongo, etc.) before relying on this.
-let users = [];
-let shipments = [];
-
-// Adds a checkpoint to a shipment's tracking history
-const addTrackingEvent = (shipment, { location, status, note }) => {
+// Adds a checkpoint to a shipment's tracking history and saves it
+const addTrackingEvent = async (shipment, { location, status, note }) => {
   if (location) shipment.currentLocation = location;
   if (status) shipment.status = status;
   shipment.trackingEvents.push({
@@ -51,6 +114,7 @@ const addTrackingEvent = (shipment, { location, status, note }) => {
     note: note || '',
     timestamp: new Date()
   });
+  await shipment.save();
 };
 
 // Middleware for authentication
@@ -80,16 +144,17 @@ const requireAdmin = (req, res, next) => {
 };
 
 // Generate a unique, random (non-guessable) tracking ID, e.g. SHP-7K2QXH9B
-const generateTrackingId = () => {
+const generateTrackingId = async () => {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous 0/O/1/I
-  let id;
+  let id, exists;
   do {
     let code = '';
     for (let i = 0; i < 8; i++) {
       code += chars[Math.floor(Math.random() * chars.length)];
     }
     id = `SHP-${code}`;
-  } while (shipments.some(s => s.trackingId === id));
+    exists = await Shipment.exists({ trackingId: id });
+  } while (exists);
   return id;
 };
 
@@ -100,23 +165,14 @@ app.post('/register', authLimiter, async (req, res) => {
   try {
     const { username, email, password } = req.body;
 
-    const existingUser = users.find(u => u.email === email);
+    const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({ error: 'User already exists' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const newUser = {
-      id: users.length + 1,
-      username,
-      email,
-      password: hashedPassword,
-      role: 'user',
-      createdAt: new Date()
-    };
-
-    users.push(newUser);
+    await User.create({ username, email, password: hashedPassword, role: 'user' });
     res.status(201).json({ message: 'User registered successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -134,7 +190,7 @@ app.post('/admin/login', authLimiter, (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: 0, email: 'admin@system', role: 'admin' },
+      { id: 'admin', email: 'admin@system', role: 'admin' },
       JWT_SECRET,
       { expiresIn: '12h' }
     );
@@ -142,7 +198,7 @@ app.post('/admin/login', authLimiter, (req, res) => {
     res.json({
       message: 'Admin login successful',
       token,
-      user: { id: 0, username: 'Admin', email: 'admin@system', role: 'admin' }
+      user: { id: 'admin', username: 'Admin', email: 'admin@system', role: 'admin' }
     });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -154,7 +210,7 @@ app.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = users.find(u => u.email === email);
+    const user = await User.findOne({ email });
     if (!user) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
@@ -165,7 +221,7 @@ app.post('/login', authLimiter, async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
+      { id: user._id.toString(), email: user.email, role: user.role },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
@@ -174,7 +230,7 @@ app.post('/login', authLimiter, async (req, res) => {
       message: 'Login successful',
       token,
       user: {
-        id: user.id,
+        id: user._id.toString(),
         username: user.username,
         email: user.email,
         role: user.role
@@ -186,9 +242,10 @@ app.post('/login', authLimiter, async (req, res) => {
 });
 
 // Get all shipments (for admin)
-app.get('/admin/shipments', authenticateToken, requireAdmin, (req, res) => {
+app.get('/admin/shipments', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    res.json(shipments);
+    const shipments = await Shipment.find().sort({ createdAt: -1 });
+    res.json(shipments.map(shipmentToJSON));
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -199,10 +256,9 @@ app.post('/shipments', authenticateToken, async (req, res) => {
   try {
     const { recipientName, origin, destination, items, value } = req.body;
 
-    const trackingId = generateTrackingId();
+    const trackingId = await generateTrackingId();
 
-    const newShipment = {
-      id: shipments.length + 1,
+    const newShipment = await Shipment.create({
       trackingId,
       userId: req.user.id,
       recipientName,
@@ -214,15 +270,12 @@ app.post('/shipments', authenticateToken, async (req, res) => {
       currentLocation: origin,
       trackingEvents: [
         { location: origin, status: 'pending', note: 'Shipment created, awaiting admin approval', timestamp: new Date() }
-      ],
-      createdAt: new Date()
-    };
-
-    shipments.push(newShipment);
+      ]
+    });
 
     res.status(201).json({
       message: 'Shipment created successfully. Awaiting admin approval.',
-      shipmentId: newShipment.id,
+      shipmentId: newShipment._id.toString(),
       trackingId
     });
   } catch (error) {
@@ -231,45 +284,42 @@ app.post('/shipments', authenticateToken, async (req, res) => {
 });
 
 // Admin: Block a shipment
-app.put('/admin/shipments/:id/block', authenticateToken, requireAdmin, (req, res) => {
+app.put('/admin/shipments/:id/block', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-    const shipment = shipments.find(s => s.id === parseInt(id));
+    const shipment = await Shipment.findById(req.params.id);
 
     if (!shipment) {
       return res.status(404).json({ error: 'Shipment not found' });
     }
 
-    addTrackingEvent(shipment, { status: 'blocked', note: 'Shipment blocked' });
-    res.json({ message: 'Shipment blocked successfully', shipment });
+    await addTrackingEvent(shipment, { status: 'blocked', note: 'Shipment blocked' });
+    res.json({ message: 'Shipment blocked successfully', shipment: shipmentToJSON(shipment) });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Admin: Approve a shipment — this is now the only way a shipment moves forward
-app.put('/admin/shipments/:id/approve', authenticateToken, requireAdmin, (req, res) => {
+app.put('/admin/shipments/:id/approve', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-    const shipment = shipments.find(s => s.id === parseInt(id));
+    const shipment = await Shipment.findById(req.params.id);
 
     if (!shipment) {
       return res.status(404).json({ error: 'Shipment not found' });
     }
 
-    addTrackingEvent(shipment, { status: 'approved', note: 'Shipment approved for onward delivery' });
-    res.json({ message: 'Shipment approved successfully', shipment });
+    await addTrackingEvent(shipment, { status: 'approved', note: 'Shipment approved for onward delivery' });
+    res.json({ message: 'Shipment approved successfully', shipment: shipmentToJSON(shipment) });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Admin: Add a live tracking checkpoint (location the shipment has reached en route)
-app.post('/admin/shipments/:id/track', authenticateToken, requireAdmin, (req, res) => {
+app.post('/admin/shipments/:id/track', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
     const { location, status, note } = req.body;
-    const shipment = shipments.find(s => s.id === parseInt(id));
+    const shipment = await Shipment.findById(req.params.id);
 
     if (!shipment) {
       return res.status(404).json({ error: 'Shipment not found' });
@@ -278,58 +328,56 @@ app.post('/admin/shipments/:id/track', authenticateToken, requireAdmin, (req, re
       return res.status(400).json({ error: 'Provide a location and/or status for the checkpoint' });
     }
 
-    addTrackingEvent(shipment, { location, status, note });
-    res.json({ message: 'Tracking checkpoint added', shipment });
+    await addTrackingEvent(shipment, { location, status, note });
+    res.json({ message: 'Tracking checkpoint added', shipment: shipmentToJSON(shipment) });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Get user's shipments
-app.get('/shipments', authenticateToken, (req, res) => {
+app.get('/shipments', authenticateToken, async (req, res) => {
   try {
-    const userShipments = shipments.filter(s => s.userId === req.user.id);
-    res.json(userShipments);
+    const userShipments = await Shipment.find({ userId: req.user.id }).sort({ createdAt: -1 });
+    res.json(userShipments.map(shipmentToJSON));
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Get shipment status by tracking ID (e.g. SHP-XXXXXXXX)
-app.get('/shipments/tracking/:trackingId', authenticateToken, (req, res) => {
+app.get('/shipments/tracking/:trackingId', authenticateToken, async (req, res) => {
   try {
-    const { trackingId } = req.params;
-    const shipment = shipments.find(s => s.trackingId === trackingId);
+    const shipment = await Shipment.findOne({ trackingId: req.params.trackingId });
 
     if (!shipment) {
       return res.status(404).json({ error: 'Shipment not found' });
     }
 
-    if (shipment.userId !== req.user.id && req.user.role !== 'admin') {
+    if (shipment.userId.toString() !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    res.json(shipment);
+    res.json(shipmentToJSON(shipment));
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Get shipment status
-app.get('/shipments/:id', authenticateToken, (req, res) => {
+app.get('/shipments/:id', authenticateToken, async (req, res) => {
   try {
-    const { id } = req.params;
-    const shipment = shipments.find(s => s.id === parseInt(id));
+    const shipment = await Shipment.findById(req.params.id);
 
     if (!shipment) {
       return res.status(404).json({ error: 'Shipment not found' });
     }
 
-    if (shipment.userId !== req.user.id && req.user.role !== 'admin') {
+    if (shipment.userId.toString() !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    res.json(shipment);
+    res.json(shipmentToJSON(shipment));
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
