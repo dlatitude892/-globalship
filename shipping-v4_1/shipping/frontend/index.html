@@ -839,24 +839,75 @@
     renderTrackingMap(s);
   }
 
+  // ---- Client-side geocoding ----
+  // Runs in the visitor's browser rather than on the backend, because
+  // Nominatim (the free OpenStreetMap geocoding service) blocks requests
+  // coming from cloud-hosting IP ranges (like Render) to prevent bulk
+  // scraping — a normal browser request doesn't hit that block.
+  // Cached by location string so repeated polls/renders don't re-geocode
+  // the same place over and over.
+  const geocodeCache = {};
+  async function geocodeClient(query) {
+    if (!query) return null;
+    const key = query.trim().toLowerCase();
+    if (geocodeCache[key]) return geocodeCache[key];
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      if (data && data[0]) {
+        const coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+        geocodeCache[key] = coords;
+        return coords;
+      }
+    } catch (err) {
+      console.error('[geocode] failed for', query, err);
+    }
+    return null;
+  }
+
   // Live route map (Leaflet + OpenStreetMap — free, no API key). Rebuilt on
-  // every refresh since the tracking card's HTML is fully replaced each poll.
+  // every refresh since the tracking card's HTML is fully replaced each poll;
+  // geocoding is cached so this is instant after the first lookup.
   let leafletMap = null;
-  function renderTrackingMap(s) {
+  async function renderTrackingMap(s) {
     const mapDiv = document.getElementById('trackingMap');
     if (!mapDiv || typeof L === 'undefined') return;
 
-    if (leafletMap) { leafletMap.remove(); leafletMap = null; }
+    mapDiv.innerHTML = '<p class="empty-note" style="padding:20px;">Loading map…</p>';
+
+    // Geocode every unique location this shipment touches: origin, destination,
+    // and each checkpoint's location string (sequential, not parallel — kinder
+    // to the free geocoding service and avoids bursty request patterns).
+    const uniqueLocations = [...new Set([
+      s.origin,
+      s.destination,
+      ...(s.trackingEvents || []).map(e => e.location)
+    ].filter(Boolean))];
+
+    const coordsByLocation = {};
+    for (const loc of uniqueLocations) {
+      coordsByLocation[loc] = await geocodeClient(loc);
+    }
+
+    const originCoords = coordsByLocation[s.origin];
+    const destinationCoords = coordsByLocation[s.destination];
+    const currentCoords = coordsByLocation[s.currentLocation];
 
     const routePoints = [];
-    if (s.originCoords) routePoints.push([s.originCoords.lat, s.originCoords.lng]);
-    (s.trackingEvents || []).forEach(e => { if (typeof e.lat === 'number' && typeof e.lng === 'number') routePoints.push([e.lat, e.lng]); });
-    if (s.currentCoords) routePoints.push([s.currentCoords.lat, s.currentCoords.lng]);
+    if (originCoords) routePoints.push([originCoords.lat, originCoords.lng]);
+    (s.trackingEvents || []).forEach(e => {
+      const c = coordsByLocation[e.location];
+      if (c) routePoints.push([c.lat, c.lng]);
+    });
+    if (currentCoords) routePoints.push([currentCoords.lat, currentCoords.lng]);
 
     if (routePoints.length === 0) {
       mapDiv.innerHTML = '<p class="empty-note" style="padding:20px;">Map unavailable for these locations.</p>';
       return;
     }
+
+    mapDiv.innerHTML = '';
+    if (leafletMap) { leafletMap.remove(); leafletMap = null; }
 
     leafletMap = L.map(mapDiv, { attributionControl: true }).setView(routePoints[routePoints.length - 1], 4);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -864,23 +915,23 @@
       maxZoom: 18
     }).addTo(leafletMap);
 
-    if (s.originCoords) L.marker([s.originCoords.lat, s.originCoords.lng]).addTo(leafletMap).bindPopup('Origin: ' + s.origin);
-    if (s.destinationCoords) L.marker([s.destinationCoords.lat, s.destinationCoords.lng]).addTo(leafletMap).bindPopup('Destination: ' + s.destination);
-    if (s.currentCoords) {
-      L.circleMarker([s.currentCoords.lat, s.currentCoords.lng], { radius: 8, color: '#4f8cff', fillColor: '#4f8cff', fillOpacity: 0.8 })
+    if (originCoords) L.marker([originCoords.lat, originCoords.lng]).addTo(leafletMap).bindPopup('Origin: ' + s.origin);
+    if (destinationCoords) L.marker([destinationCoords.lat, destinationCoords.lng]).addTo(leafletMap).bindPopup('Destination: ' + s.destination);
+    if (currentCoords) {
+      L.circleMarker([currentCoords.lat, currentCoords.lng], { radius: 8, color: '#4f8cff', fillColor: '#4f8cff', fillOpacity: 0.8 })
         .addTo(leafletMap).bindPopup('Current: ' + s.currentLocation);
     }
 
     if (routePoints.length > 1) {
       L.polyline(routePoints, { color: '#4f8cff', weight: 3 }).addTo(leafletMap);
     }
-    if (s.currentCoords && s.destinationCoords) {
-      L.polyline([[s.currentCoords.lat, s.currentCoords.lng], [s.destinationCoords.lat, s.destinationCoords.lng]], {
+    if (currentCoords && destinationCoords) {
+      L.polyline([[currentCoords.lat, currentCoords.lng], [destinationCoords.lat, destinationCoords.lng]], {
         color: '#8791a0', weight: 2, dashArray: '6 8'
       }).addTo(leafletMap);
     }
 
-    const boundsPoints = routePoints.concat(s.destinationCoords ? [[s.destinationCoords.lat, s.destinationCoords.lng]] : []);
+    const boundsPoints = routePoints.concat(destinationCoords ? [[destinationCoords.lat, destinationCoords.lng]] : []);
     leafletMap.fitBounds(L.latLngBounds(boundsPoints), { padding: [30, 30] });
   }
 
