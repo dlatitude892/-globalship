@@ -21,9 +21,11 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-insecure-secret-change-me
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'ChangeMe-Admin-2026';
 
 // Restrict which origins can call this API. Set ALLOWED_ORIGIN to your deployed
-// Netlify URL (e.g. https://your-site.netlify.app) once deployed. Defaults to
-// allowing any origin, which is fine for local development only.
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
+// Netlify URL (e.g. https://your-site.netlify.app) once deployed. Supports a
+// comma-separated list, so a custom domain and the netlify.app URL (or a
+// www. and apex version) can all be allowed at once. Defaults to allowing
+// any origin, which is fine for local development only.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGIN || '*').split(',').map(o => o.trim()).filter(Boolean);
 
 // Used to build links inside emails (e.g. back to the tracking page)
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:8080';
@@ -89,30 +91,11 @@ const emailWrapper = (title, bodyHtml) => `
   </div>
 `;
 
-// ---- Geocoding (free, no API key — OpenStreetMap's Nominatim) ----
-// Converts a location string like "New York, US" into {lat, lng} so the
-// frontend can plot it on a live map. Nominatim's usage policy asks for a
-// descriptive User-Agent and no more than ~1 request/sec — fine for this
-// app's scale (geocoding only happens when a shipment is created or a
-// checkpoint is added, not on every page view). For heavier traffic, swap
-// this for a paid geocoding provider.
-const NOMINATIM_UA = `GlobalShipTracker/1.0 (${ADMIN_EMAIL || 'no-contact-set@example.com'})`;
-const geocode = async (query) => {
-  if (!query) return null;
-  try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`,
-      { headers: { 'User-Agent': NOMINATIM_UA } }
-    );
-    const data = await res.json();
-    if (data && data[0]) {
-      return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-    }
-  } catch (err) {
-    console.error('[GEOCODE] Failed for', query, '-', err.message);
-  }
-  return null;
-};
+// Note: geocoding (turning "New York, US" into map coordinates) happens
+// client-side in the browser, not here. Nominatim (the free geocoding
+// service) blocks requests coming from cloud-hosting IP ranges like Render's
+// to prevent bulk-scraping abuse — a request from each visitor's own browser
+// doesn't hit that block, so the frontend geocodes locations itself.
 
 // ---- Models ----
 const userSchema = new mongoose.Schema({
@@ -201,7 +184,16 @@ const notificationToJSON = (n) => ({
 
 app.use(helmet());
 app.use(express.json());
-app.use(cors({ origin: ALLOWED_ORIGIN }));
+app.use(cors({
+  origin: (origin, callback) => {
+    // No origin header (e.g. curl, server-to-server) — allow it through.
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin)) {
+      return callback(null, true);
+    }
+    callback(new Error('Not allowed by CORS'));
+  }
+}));
 
 // Slow down brute-force attempts against login/admin-login/register
 const authLimiter = rateLimit({
@@ -214,19 +206,12 @@ const authLimiter = rateLimit({
 
 // Adds a checkpoint to a shipment's tracking history and saves it
 const addTrackingEvent = async (shipment, { location, status, note }) => {
-  let coords = null;
-  if (location) {
-    shipment.currentLocation = location;
-    coords = await geocode(location);
-    if (coords) shipment.currentCoords = coords;
-  }
+  if (location) shipment.currentLocation = location;
   if (status) shipment.status = status;
   shipment.trackingEvents.push({
     location: location || shipment.currentLocation,
     status: status || shipment.status,
     note: note || '',
-    lat: coords ? coords.lat : (shipment.currentCoords ? shipment.currentCoords.lat : undefined),
-    lng: coords ? coords.lng : (shipment.currentCoords ? shipment.currentCoords.lng : undefined),
     timestamp: new Date()
   });
   await shipment.save();
@@ -421,12 +406,6 @@ app.post('/shipments', authenticateToken, async (req, res) => {
 
     const trackingId = await generateTrackingId();
 
-    // Best-effort geocoding — a shipment can still be created even if lookup fails
-    const [originCoords, destinationCoords] = await Promise.all([
-      geocode(origin),
-      geocode(destination)
-    ]);
-
     const days = estimatedTransitDays ? parseInt(estimatedTransitDays, 10) : null;
     const estimatedDeliveryDate = days
       ? new Date(Date.now() + days * 24 * 60 * 60 * 1000)
@@ -447,15 +426,10 @@ app.post('/shipments', authenticateToken, async (req, res) => {
       estimatedDeliveryDate,
       status: 'pending',
       currentLocation: origin,
-      originCoords,
-      destinationCoords,
-      currentCoords: originCoords,
       trackingEvents: [
         {
           location: origin, status: 'pending',
           note: 'Shipment created, awaiting admin approval',
-          lat: originCoords ? originCoords.lat : undefined,
-          lng: originCoords ? originCoords.lng : undefined,
           timestamp: new Date()
         }
       ]
