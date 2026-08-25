@@ -293,9 +293,9 @@ app.post('/register', authLimiter, async (req, res) => {
 
     sendMail({
       to: email,
-      subject: 'Welcome to GlobalShip',
+      subject: 'Thank you for trusting GlobalShip',
       html: emailWrapper('Welcome, ' + username, `
-        <p>Your account has been created. You can now sign in and create shipments.</p>
+        <p>Thank you for trusting GlobalShip with your shipments. Your account is ready — sign in anytime to create and track shipments.</p>
       `)
     });
 
