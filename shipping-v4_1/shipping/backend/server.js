@@ -9,6 +9,13 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const app = express();
 
+// Render (and most hosting platforms) sit behind a reverse proxy that adds an
+// X-Forwarded-For header. Without this, express-rate-limit can't safely
+// determine the real client IP and throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
+// on every request to a rate-limited route. "1" means trust exactly one hop
+// (Render's own proxy) — correct for this deployment.
+app.set('trust proxy', 1);
+
 // ---- Security-critical config (set these as real environment variables in production) ----
 if (!process.env.JWT_SECRET || !process.env.ADMIN_PASSWORD) {
   console.warn(
