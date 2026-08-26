@@ -7,7 +7,6 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const nodemailer = require('nodemailer');
 const app = express();
 
 // ---- Security-critical config (set these as real environment variables in production) ----
@@ -47,35 +46,37 @@ mongoose.connect(MONGODB_URI)
     process.exit(1);
   });
 
-// ---- Email (SMTP — works with any custom-domain webmail: cPanel, Zoho, etc.) ----
-// All of SMTP_HOST/PORT/USER/PASS must be set for email to actually send.
-// If they're missing, the app still runs fine — emails are just skipped with a
-// warning logged, so this never blocks registration or shipment creation.
-const SMTP_HOST = process.env.SMTP_HOST;
-const SMTP_PORT = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 587;
-const SMTP_SECURE = process.env.SMTP_SECURE === 'true'; // true for port 465, false for 587/STARTTLS
-const SMTP_USER = process.env.SMTP_USER;
-const SMTP_PASS = process.env.SMTP_PASS;
-const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER; // e.g. "GlobalShip <info@yourdomain.com>"
+// ---- Email (Resend — HTTPS API, no SMTP involved) ----
+// Render's free tier blocks all outbound SMTP traffic (ports 25, 465, 587),
+// so a normal SMTP-based mailer (Gmail, Zoho, cPanel, etc.) can never
+// connect from a free Render service — it will always time out, regardless
+// of how correct the credentials are. Resend sends email over a plain
+// HTTPS API call instead, which isn't blocked. Free tier: 100 emails/day,
+// 3,000/month, no card required — plenty for this app's transactional volume.
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const EMAIL_FROM = process.env.EMAIL_FROM; // e.g. "GlobalShip <info@yourdomain.com>" — must be on a domain verified in Resend
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL; // where new-signup notification emails go
 
-let transporter = null;
-if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
-  transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_SECURE,
-    auth: { user: SMTP_USER, pass: SMTP_PASS }
-  });
-} else {
-  console.warn('[WARNING] SMTP_HOST/SMTP_USER/SMTP_PASS not fully set — emails will be skipped.');
+if (!RESEND_API_KEY || !EMAIL_FROM) {
+  console.warn('[WARNING] RESEND_API_KEY/EMAIL_FROM not fully set — emails will be skipped.');
 }
 
 // Best-effort email send — never throws, never blocks the calling request.
 const sendMail = async ({ to, subject, html }) => {
-  if (!transporter) return;
+  if (!RESEND_API_KEY || !EMAIL_FROM) return;
   try {
-    await transporter.sendMail({ from: SMTP_FROM, to, subject, html });
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${RESEND_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ from: EMAIL_FROM, to, subject, html })
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`[EMAIL] Failed to send "${subject}" to ${to}: ${res.status} ${body}`);
+    }
   } catch (err) {
     console.error(`[EMAIL] Failed to send "${subject}" to ${to}:`, err.message);
   }
@@ -131,6 +132,7 @@ const shipmentSchema = new mongoose.Schema({
   weight: Number, // kg
   estimatedTransitDays: Number,
   estimatedDeliveryDate: Date,
+  adminMemo: String,
   status: { type: String, default: 'pending' },
   currentLocation: String,
   originCoords: coordsSchema,
@@ -165,6 +167,7 @@ const shipmentToJSON = (s) => ({
   weight: s.weight,
   estimatedTransitDays: s.estimatedTransitDays,
   estimatedDeliveryDate: s.estimatedDeliveryDate,
+  adminMemo: s.adminMemo,
   status: s.status,
   currentLocation: s.currentLocation,
   originCoords: s.originCoords,
@@ -525,6 +528,53 @@ app.post('/admin/shipments/:id/track', authenticateToken, requireAdmin, async (r
     await addTrackingEvent(shipment, { location, status, note });
     if (status) notifyShipmentOwner(shipment, status);
     res.json({ message: 'Tracking checkpoint added', shipment: shipmentToJSON(shipment) });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Admin: Set a short delivery memo and/or revise the estimated transit days
+app.put('/admin/shipments/:id/memo', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { memo, estimatedTransitDays } = req.body;
+    const shipment = await Shipment.findById(req.params.id);
+
+    if (!shipment) {
+      return res.status(404).json({ error: 'Shipment not found' });
+    }
+    if (!memo && !estimatedTransitDays) {
+      return res.status(400).json({ error: 'Provide a memo and/or an estimated transit days value' });
+    }
+
+    if (memo !== undefined && memo !== '') shipment.adminMemo = memo;
+
+    let days = shipment.estimatedTransitDays;
+    if (estimatedTransitDays) {
+      days = parseInt(estimatedTransitDays, 10);
+      shipment.estimatedTransitDays = days;
+      shipment.estimatedDeliveryDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    }
+
+    await shipment.save();
+
+    try {
+      const owner = await User.findById(shipment.userId);
+      if (owner) {
+        sendMail({
+          to: owner.email,
+          subject: `Delivery update — ${shipment.trackingId}`,
+          html: emailWrapper('Delivery Update', `
+            ${memo ? `<p>${memo}</p>` : ''}
+            ${estimatedTransitDays ? `<p>Updated estimated delivery: ${shipment.estimatedDeliveryDate.toDateString()} (${days} day${days === 1 ? '' : 's'})</p>` : ''}
+            <p>Track it anytime: <a href="${FRONTEND_URL}/?track=${shipment.trackingId}" style="color:#4f8cff;">${FRONTEND_URL}/?track=${shipment.trackingId}</a></p>
+          `)
+        });
+      }
+    } catch (err) {
+      console.error('[EMAIL] Could not notify shipment owner of memo update:', err.message);
+    }
+
+    res.json({ message: 'Memo saved', shipment: shipmentToJSON(shipment) });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
