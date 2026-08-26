@@ -699,6 +699,14 @@
           <option value="delivered">Delivered</option>
         </select>
         <button class="mini-btn mini-btn-primary" onclick="addCheckpoint('${s.id}')">Add Checkpoint</button>
+      </div>
+      <div class="checkpoint-row" style="flex-direction:column; align-items:stretch;">
+        ${s.adminMemo ? `<div style="font-size:0.82rem; color:var(--steel); margin-bottom:6px;">Current memo: "${s.adminMemo}"</div>` : ''}
+        <textarea placeholder="Short delivery memo for the customer (optional)" id="memo-${s.id}" rows="2" style="width:100%; padding:8px 10px; border-radius:6px; border:1px solid var(--line); background:var(--surface-2); color:var(--paper); font-size:0.85rem; font-family:'Work Sans',sans-serif; resize:vertical;"></textarea>
+        <div class="otp-row">
+          <input type="number" min="1" step="1" placeholder="Days to deliver (optional)" id="days-${s.id}">
+          <button class="mini-btn mini-btn-primary" onclick="saveMemo('${s.id}')">Save Memo</button>
+        </div>
       </div>` : '';
 
     return `
@@ -788,8 +796,19 @@
     } catch (err) { alert(`Failed to add checkpoint: ${err.message}`); }
   }
 
+  async function saveMemo(id) {
+    const memo = document.getElementById(`memo-${id}`).value.trim();
+    const estimatedTransitDays = document.getElementById(`days-${id}`).value;
+    if (!memo && !estimatedTransitDays) { alert('Write a memo and/or set a days-to-deliver value.'); return; }
+    try {
+      await apiRequest(`/admin/shipments/${id}/memo`, { method: 'PUT', body: JSON.stringify({ memo, estimatedTransitDays }) });
+      loadAdminShipments();
+    } catch (err) { alert(`Failed to save memo: ${err.message}`); }
+  }
+
   window.adminUpdateShipment = adminUpdateShipment;
   window.addCheckpoint = addCheckpoint;
+  window.saveMemo = saveMemo;
 
   function renderTrackingResult(s) {
     const trackingResult = document.getElementById('trackingResult');
@@ -813,6 +832,12 @@
           ${badgeHtml(s.status)}
           <span class="mono" style="color:var(--steel); font-size:0.85rem;">Currently: ${s.currentLocation}</span>
         </div>
+
+        ${s.adminMemo ? `
+        <div style="margin-top:16px; padding:14px 16px; background:var(--gold-soft); border:1px solid rgba(212,160,23,0.3); border-radius:8px;">
+          <div style="font-size:0.68rem; color:var(--gold); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px;"><i class="fas fa-comment-dots"></i> Note from GlobalShip</div>
+          <div style="font-size:0.9rem;">${s.adminMemo}</div>
+        </div>` : ''}
 
         <div id="trackingMap" style="height:280px; border-radius:10px; overflow:hidden; margin-top:18px; border:1px solid var(--line);"></div>
 
